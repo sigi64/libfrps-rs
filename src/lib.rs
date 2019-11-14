@@ -1,4 +1,3 @@
-
 use std::convert::TryInto;
 use std::convert::TryFrom;
 use byteorder::{ByteOrder, LittleEndian};
@@ -152,7 +151,7 @@ fn write_head(frpsType:u8, size: usize, dst: &mut [u8]) -> Result<usize, &str> {
     dst[0] = frpsType | u8::try_from(octets).unwrap();;
 
     // this works only for little-endian systems
-    LittleEndian::write_u64(&mut dst[1 ..], size.try_into().unwrap());
+    LittleEndian::write_u64(&mut dst[1 ..], size as u64);
 
     Ok(octets + /*header*/ 1 + /*first byte*/1)
 }
@@ -175,8 +174,76 @@ enum Value {
     Bool(bool)
 }
 
+enum States {
+    S_INIT,
+    S_VALUE,
+    S_FLUSH_BUFFER,
+
+    S_STACK_POP,
+
+    S_STR_INIT,
+    S_STR_HEAD,
+    S_STR_VALUE,
+
+    S_BIN_INIT,
+    S_BIN_HEAD,
+    S_BIN_VALUE,
+
+    S_STRUCT_INIT,
+    S_STRUCT_HEAD,
+    S_STRUCT_MEMBERS,
+    S_STRUCT_ITEM,
+    S_STRUCT_ITEM_KEY,
+
+    S_ARRAY_INIT,
+    S_ARRAY_HEAD,
+    S_ARRAY_ITEM,
+
+    S_CALL_HEAD,
+    S_CALL_METHOD,
+
+    S_RESPONSE_HEAD,
+
+    S_FAULT_HEAD,
+    S_FAULT_CODE,
+    S_FAULT_MSG,
+    S_FAULT_MSG_DATA
+}
+
+struct Frame {
+    value: Value,
+    iter: Option<Box<dyn Iterator<Item = Value>>>,
+}
+
+impl Frame {
+    fn new(value: Value) -> Frame {
+        Frame {value: value, iter: None}
+    }
+}
+
+struct Serializer {
+    state: States,
+    stack: Vec<Frame>,
+
+    buffer: [u8; 11]
+}
+
+impl Serializer {
+    fn new() -> Serializer {
+        Serializer {state: States::S_INIT, stack: Vec::new(), buffer: [0; 11]}
+    }
+
+    fn reset(&mut self) {
+        self.state = States::S_INIT;
+        self.stack.clear();
+    }
+}
+
+
 fn serialize(buf: &mut [u8], val: &Value) -> Result<usize, String> {
-    
+    let mut serializer = Serializer::new();
+
+    serializer.reset();
     Ok(0)
 }
 
@@ -194,22 +261,21 @@ mod tests {
 
         let mut buffer:[u8; 256] = [0; 256];
 
-        let cnt = write_magic(1u8, &mut buffer);
+        let cnt = write_magic(1u8, &mut buffer).unwrap();
 
         analyze_slice(&buffer[0 .. 5]);
         assert_eq!(cnt, 5);
 
-        let cnt = write_bool(false, &mut buffer[cnt .. ]);
+        let cnt = write_bool(false, &mut buffer[cnt .. ]).unwrap();
         
         analyze_slice(&buffer[0 .. 6]);
         assert_eq!(cnt, 1);
 
-        let cnt = write_int(1024123123, &mut buffer[cnt ..]);
+        let cnt = write_int(1024123123, &mut buffer[cnt ..]).unwrap();
         assert_eq!(cnt, 5);
 
-        let cnt = write_double(1024123.123, &mut buffer[cnt ..]);
+        let cnt = write_double(1024123.123, &mut buffer[cnt ..]).unwrap();
         assert_eq!(cnt, 9);
     }
 }
  
-
