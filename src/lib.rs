@@ -111,7 +111,7 @@ fn write_int(val: i64, dst: &mut [u8]) -> Result<usize, &str> {
         get_octets(u64::try_from(-val).unwrap())
     };
 
-    if (dst.len() < octets + 2) {
+    if dst.len() < (octets + 2) {
         return Err("not enought space");
     }
     if val >= 0 {
@@ -160,7 +160,7 @@ fn write_datetime(val: DateTime, dst: &mut [u8]) -> Result<usize, &str> {
     dst[10] = val.day;
     dst[11] = val.month;
 
-    let year = if (val.year <= 1600) {
+    let year = if val.year <= 1600 {
         0
     } else {
         val.year - 1600
@@ -207,48 +207,41 @@ enum Value {
 }
 
 enum States {
-    S_INIT,
-    S_VALUE,
-    S_FLUSH_BUFFER,
+    Init,
+    Value,
+    FlushBuffer,
+    StackPop,
+    StrInit,
+    StrHead,
+    StrValue,
+    BinInit,
+    BinHead,
+    BinValue,
+    StructInit,
+    StructHead,
+    StructMembers,
+    StructItem,
+    StructItemKey,
+    ArrayInit,
+    ArrayHead,
+    ArrayItem,
+    CallHead,
+    CallMethod,
+    ResponseHead,
 
-    S_STACK_POP,
-
-    S_STR_INIT,
-    S_STR_HEAD,
-    S_STR_VALUE,
-
-    S_BIN_INIT,
-    S_BIN_HEAD,
-    S_BIN_VALUE,
-
-    S_STRUCT_INIT,
-    S_STRUCT_HEAD,
-    S_STRUCT_MEMBERS,
-    S_STRUCT_ITEM,
-    S_STRUCT_ITEM_KEY,
-
-    S_ARRAY_INIT,
-    S_ARRAY_HEAD,
-    S_ARRAY_ITEM,
-
-    S_CALL_HEAD,
-    S_CALL_METHOD,
-
-    S_RESPONSE_HEAD,
-
-    S_FAULT_HEAD,
-    S_FAULT_CODE,
-    S_FAULT_MSG,
-    S_FAULT_MSG_DATA,
+    FaultHead,
+    FaultCode,
+    FaultMsg,
+    FaultMsgData,
 }
 
-struct Frame {
-    value: Value,
+struct Frame<'a> {
+    value: &'a Value,
     iter: Option<Box<dyn Iterator<Item = Value>>>,
 }
 
-impl Frame {
-    fn new(value: Value) -> Frame {
+impl<'a> Frame<'a> {
+    fn new(value: &'a Value) -> Frame<'a> {
         Frame {
             value: value,
             iter: None,
@@ -256,6 +249,10 @@ impl Frame {
     }
 }
 
+/** Represent either temporary buffer
+ *   or keep state how many bytes was copied from value parametr source
+ *  (string values arrays eg.)
+ */
 struct Source {
     len: usize,
     pos: usize,
@@ -282,17 +279,17 @@ impl Source {
     }
 }
 
-struct Serializer {
+struct Serializer<'a> {
     state: States,
-    stack: Vec<Frame>,
+    stack: Vec<Frame<'a>>,
 
     source: Source, // colecting buffer
 }
 
-impl Serializer {
-    fn new() -> Serializer {
+impl<'a> Serializer<'a> {
+    fn new() -> Serializer<'a> {
         Serializer {
-            state: States::S_INIT,
+            state: States::Init,
             stack: Vec::new(),
             source: Source {
                 len: 0,
@@ -303,47 +300,110 @@ impl Serializer {
     }
 
     fn reset(&mut self) {
-        self.state = States::S_INIT;
+        self.state = States::Init;
         self.stack.clear();
     }
 
-    fn write_call(&mut self, dst: &mut [u8], name: &str) -> usize {
+    fn write_v(&mut self, dst: &mut [u8], written: usize) -> Result<usize, &str> {
+        let mut written: usize = written;
+        while self.stack.len() > 0 {
+            loop {
+                let frame = self.stack.last().unwrap();
+                let value = frame.value;
+
+                match &(self.state) {
+                    String => self.state = States::StrInit,
+                    Binary => self.state = States::BinInit,
+                    Struct => self.state = States::StructInit,
+                    Array => self.state = States::StructInit,
+                    Bool => {
+                        if written == dst.len() {
+                            return Ok(written);
+                        }
+                        let b_v = match value { Value::Bool(x) => x, _ => panic!("something wrong") };
+
+                        written += write_bool(*b_v, dst).unwrap();
+                        self.state = States::StackPop;
+                    }
+                }
+            }
+        }
+
+        Ok(written)
+    }
+
+    fn write_call(&mut self, dst: &mut [u8], name: &str) -> Result<usize, &str> {
         let mut written: usize = 0;
 
         loop {
             match &(self.state) {
-                S_INIT => {
+                Init => {
                     let cnt = write_magic(CALL_ID, &mut self.source.buffer).unwrap();
                     self.source.prepare(cnt);
-                    self.state = States::S_CALL_HEAD;
+                    self.state = States::CallHead;
                 }
-                S_CALL_HEAD => {
+                CallHead => {
                     written += self.source.flush(dst, written);
                     if !self.source.is_empty() {
-                        return written;
+                        return Ok(written);
                     }
 
                     if name.len() > 255 {
-                        return 0;
+                        return Err("method name too long");
                     }
-                    self.state = States::S_CALL_METHOD;
+
+                    if written == dst.len() {
+                        return Ok(written);
+                    }
+
+                    // prepare method name lenght in the buffer
+                    dst[written] = name.len() as u8;
+                    written += 1;
+                    self.source.prepare(name.len());
+                    self.state = States::CallMethod;
                 }
-                S_CALL_METHOD => {
+                CallMethod => {
+                    written += Serializer::copy_next_chunk(
+                        dst,
+                        written,
+                        &mut self.source,
+                        &name.as_bytes(),
+                    );
                     break;
                 }
             }
         }
-        written
+        Ok(written)
     }
 
-    fn write_value(&mut self, dst: &mut [u8], value: &Value) -> usize {
-        0
+    fn write_value(&mut self, dst: &mut [u8], value: &'a Value) -> Result<usize, &str> {
+        loop {
+            match &(self.state) {
+                Init => {
+                    self.stack.push(Frame::new(value));
+                    self.state = States::Value;
+                }
+                _ => {
+                    return self.write_v(dst, 0);
+                }
+            }
+        }
     }
 
-    // fn _copy_next_chunk(dst: &mut [u8], written: usize, src: &mut Source) -> usize {
-    //     let write = cmp::min(dst.len() - written, src.len - src.pos);
-    //     write
-    // }
+    fn copy_next_chunk(
+        dst: &mut [u8],
+        written: usize,
+        src_state: &mut Source,
+        src: &[u8],
+    ) -> usize {
+        let write = cmp::min(dst.len() - written, src_state.len - src_state.pos);
+        if write > 0 {
+            dst[written..].copy_from_slice(&src[src_state.pos..src_state.pos + write]);
+            src_state.pos += write;
+        }
+
+        write
+    }
 }
 
 fn serialize(buf: &mut [u8], val: &Value) -> Result<usize, String> {
@@ -351,7 +411,7 @@ fn serialize(buf: &mut [u8], val: &Value) -> Result<usize, String> {
 
     let mut buffer: [u8; 256] = [0; 256];
 
-    let cnt = serializer.write_call(&mut buffer, "server.stat");
+    let cnt = serializer.write_call(&mut buffer, "server.stat").unwrap();
     let cnt = serializer.write_value(&mut buffer[cnt..], val);
 
     serializer.reset();
