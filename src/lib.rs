@@ -160,11 +160,7 @@ fn write_datetime(val: DateTime, dst: &mut [u8]) -> Result<usize, &str> {
     dst[10] = val.day;
     dst[11] = val.month;
 
-    let year = if val.year <= 1600 {
-        0
-    } else {
-        val.year - 1600
-    };
+    let year = if val.year <= 1600 { 0 } else { val.year - 1600 };
 
     LittleEndian::write_u16(&mut dst[12..], year);
     Ok(14)
@@ -237,14 +233,34 @@ enum States {
 
 struct Frame<'a> {
     value: &'a Value,
-    iter: Option<Box<dyn Iterator<Item = Value>>>,
+    //iter: Option<Box<dyn Iterator<Item = Value>>>,
+    //iter: Option<&'a dyn Iterator<Item = Value>>,
+    vec_iter: Option<Box<dyn Iterator<Item = Value> + 'a>>,
+    struct_iter: Option<Box<dyn Iterator<Item = (String, Value)> + 'a>>,
+    idx: usize
 }
 
 impl<'a> Frame<'a> {
     fn new(value: &'a Value) -> Frame<'a> {
-        Frame {
-            value: value,
-            iter: None,
+        match value {
+            Value::Array(v) => Frame { 
+                value: value, 
+                vec_iter: Some(Box::new(&v.iter())),
+                struct_iter: None, 
+                idx: 0
+            },
+            Value::Struct(v) => Frame { 
+                value: value,
+                vec_iter: None, 
+                struct_iter: Some(Box::new(&v.iter())), 
+                idx: 0
+            },
+            _ => Frame {
+                value: value,
+                vec_iter: None,
+                struct_iter: None,
+                idx: 0
+            },
         }
     }
 }
@@ -305,25 +321,132 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_v(&mut self, dst: &mut [u8], written: usize) -> Result<usize, &str> {
-        let mut written: usize = written;
+        let mut written = written;
         while self.stack.len() > 0 {
             loop {
                 let frame = self.stack.last().unwrap();
                 let value = frame.value;
 
                 match &(self.state) {
-                    String => self.state = States::StrInit,
-                    Binary => self.state = States::BinInit,
-                    Struct => self.state = States::StructInit,
-                    Array => self.state = States::StructInit,
-                    Bool => {
-                        if written == dst.len() {
+                    Value => {
+                        match value {
+                            Str => {
+                                self.state = States::StrInit;
+                                break;
+                            }
+                            Binary => {
+                                self.state = States::BinInit;
+                                break;
+                            }
+                            Struct => {
+                                self.state = States::StructInit;
+                                break;
+                            }
+                            Array => {
+                                self.state = States::ArrayInit;
+                                break;
+                            }
+                            Value::Bool(v) => {
+                                if written == dst.len() {
+                                    return Ok(written);
+                                }
+                                written += write_bool(*v, &mut dst[written..]).unwrap();
+                                self.state = States::StackPop;
+                                break;
+                            }
+                            Value::Null => {
+                                if written == dst.len() {
+                                    return Ok(written);
+                                }
+                                written += write_null(&mut self.source.buffer).unwrap();
+                                self.state = States::StackPop;
+                                break;
+                            }
+                            Value::Int(v) => {
+                                let cnt = write_int(*v, &mut self.source.buffer).unwrap();
+                                self.source.prepare(cnt);
+                                self.state = States::FlushBuffer;
+                            }
+                            Value::Double(v) => {
+                                let cnt = write_double(*v, &mut self.source.buffer).unwrap();
+                                self.source.prepare(cnt);
+                                self.state = States::FlushBuffer;
+                            }
+                            Value::DateTime(v) => {
+                                let cnt = write_datetime(*v, &mut self.source.buffer).unwrap();
+                                self.source.prepare(cnt);
+                                self.state = States::FlushBuffer;
+                            }
+                            
+                            _ => {
+                                return Err("Unknown type");
+                            }
+                        }
+                        // Fall through
+                        self.state = States::FlushBuffer;
+                    }
+                    
+                    FlushBuffer => {
+                        written += self.source.flush(dst, written);
+                        if !self.source.is_empty() {
                             return Ok(written);
                         }
-                        let b_v = match value { Value::Bool(x) => x, _ => panic!("something wrong") };
 
-                        written += write_bool(*b_v, dst).unwrap();
+                        // Fall through
                         self.state = States::StackPop;
+                    }
+
+                    StackPop => {
+                        self.stack.pop();
+                        if self.stack.len() == 0 {
+                            return Ok(written);
+                        }
+                        let frame = self.stack.last().unwrap();
+                        match frame.value {
+                            Array => {
+                                frame.vec_iter.unwrap().next();
+                                self.state = States::ArrayItem;
+                            }
+                            Struct => {
+                                frame.struct_iter.unwrap().next();
+                                self.state = States::StructItem;
+                            }
+                            _ => {
+                                self.state = States::Value;
+                            }
+                        }
+                    }
+
+                    ArrayInit => {
+                        let v = match value {
+                            Value::Array(val) => val,
+                            _ => return Err("Unknown type"),
+                        };
+                        let cnt = write_head(ARRAY_ID, v.len(), &mut self.source.buffer).unwrap();
+                        self.source.prepare(cnt);
+                        self.state = States::ArrayHead;
+                        continue;
+                    }
+
+                    ArrayHead => {
+                        written += self.source.flush(dst, written);
+                        if !self.source.is_empty() { return Ok(written) }
+                        self.state = States::ArrayItem;
+                    }
+
+                    ArrayItem => {
+                        let v = frame.vec_iter.unwrap().next();
+                        match v {
+                            None => {
+                                self.state = States::StackPop;
+                                continue;
+                            }
+                            Some(x) => {
+                                self.stack.push(Frame::new(&x));
+                                self.state = States::Value;
+                                continue;
+                            }
+                        }
                     }
                 }
             }
@@ -412,9 +535,9 @@ fn serialize(buf: &mut [u8], val: &Value) -> Result<usize, String> {
     let mut buffer: [u8; 256] = [0; 256];
 
     let cnt = serializer.write_call(&mut buffer, "server.stat").unwrap();
+    serializer.reset();
     let cnt = serializer.write_value(&mut buffer[cnt..], val);
 
-    serializer.reset();
     Ok(0)
 }
 
