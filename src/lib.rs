@@ -202,27 +202,35 @@ enum Value {
     Binary(Vec<u8>),
 }
 
-enum States {
+enum States<'a> {
     Init,
-    Value,
+
+    Value(&'a Value),
+
     FlushBuffer,
     StackPop,
-    StrInit,
-    StrHead,
-    StrValue,
-    BinInit,
-    BinHead,
-    BinValue,
-    StructInit,
-    StructHead,
-    StructMembers,
-    StructItem,
-    StructItemKey,
-    ArrayInit,
-    ArrayHead,
-    ArrayItem,
+
+    StrInit(&'a str),
+    StrHead(&'a str),
+    StrValue(&'a str),
+
+    BinInit(&'a [u8]),
+    BinHead(&'a [u8]),
+    BinValue(&'a [u8]),
+
+    StructInit(&'a HashMap<String, Value>),
+    StructHead(&'a HashMap<String, Value>),
+    StructMembers(&'a HashMap<String, Value>),
+    StructItem(&'a HashMap<String, Value>),
+    StructItemKey(&'a HashMap<String, Value>),
+
+    ArrayInit(&'a Vec<Value>),
+    ArrayHead(&'a Vec<Value>),
+    ArrayItem(&'a Vec<Value>),
+
     CallHead,
     CallMethod,
+
     ResponseHead,
 
     FaultHead,
@@ -231,36 +239,18 @@ enum States {
     FaultMsgData,
 }
 
-struct Frame<'a> {
-    value: &'a Value,
-    //iter: Option<Box<dyn Iterator<Item = Value>>>,
-    //iter: Option<&'a dyn Iterator<Item = Value>>,
-    vec_iter: Option<Box<dyn Iterator<Item = Value> + 'a>>,
-    struct_iter: Option<Box<dyn Iterator<Item = (String, Value)> + 'a>>,
-    idx: usize
+enum Frame<'a> {
+    //Other(&'a Value),
+    Array(std::slice::Iter<'a, Value>),
+    Struct(std::collections::hash_map::Iter<'a, String, Value>)
 }
 
 impl<'a> Frame<'a> {
     fn new(value: &'a Value) -> Frame<'a> {
         match value {
-            Value::Array(v) => Frame { 
-                value: value, 
-                vec_iter: Some(Box::new(&v.iter())),
-                struct_iter: None, 
-                idx: 0
-            },
-            Value::Struct(v) => Frame { 
-                value: value,
-                vec_iter: None, 
-                struct_iter: Some(Box::new(&v.iter())), 
-                idx: 0
-            },
-            _ => Frame {
-                value: value,
-                vec_iter: None,
-                struct_iter: None,
-                idx: 0
-            },
+            Value::Array(v) => Frame::Array(v.iter()),
+            Value::Struct(v) => Frame::Struct(v.iter()), 
+            _ => panic!("Value is not array or struct"),
         }
     }
 }
@@ -296,7 +286,7 @@ impl Source {
 }
 
 struct Serializer<'a> {
-    state: States,
+    state: States<'a>,
     stack: Vec<Frame<'a>>,
 
     source: Source, // colecting buffer
@@ -322,137 +312,137 @@ impl<'a> Serializer<'a> {
 
     fn write_v(&mut self, dst: &mut [u8], written: usize) -> Result<usize, &str> {
         let mut written = written;
-        while self.stack.len() > 0 {
-            loop {
-                let frame = self.stack.last().unwrap();
-                let value = frame.value;
-
-                match &(self.state) {
-                    Value => {
-                        match value {
-                            Str => {
-                                self.state = States::StrInit;
-                                break;
-                            }
-                            Binary => {
-                                self.state = States::BinInit;
-                                break;
-                            }
-                            Struct => {
-                                self.state = States::StructInit;
-                                break;
-                            }
-                            Array => {
-                                self.state = States::ArrayInit;
-                                break;
-                            }
-                            Value::Bool(v) => {
-                                if written == dst.len() {
-                                    return Ok(written);
-                                }
-                                written += write_bool(*v, &mut dst[written..]).unwrap();
-                                self.state = States::StackPop;
-                                break;
-                            }
-                            Value::Null => {
-                                if written == dst.len() {
-                                    return Ok(written);
-                                }
-                                written += write_null(&mut self.source.buffer).unwrap();
-                                self.state = States::StackPop;
-                                break;
-                            }
-                            Value::Int(v) => {
-                                let cnt = write_int(*v, &mut self.source.buffer).unwrap();
-                                self.source.prepare(cnt);
-                                self.state = States::FlushBuffer;
-                            }
-                            Value::Double(v) => {
-                                let cnt = write_double(*v, &mut self.source.buffer).unwrap();
-                                self.source.prepare(cnt);
-                                self.state = States::FlushBuffer;
-                            }
-                            Value::DateTime(v) => {
-                                let cnt = write_datetime(*v, &mut self.source.buffer).unwrap();
-                                self.source.prepare(cnt);
-                                self.state = States::FlushBuffer;
-                            }
-                            
-                            _ => {
-                                return Err("Unknown type");
-                            }
+        while self.stack.len() > 0 {                            
+            match &(self.state) {
+                States::Value(&value) => {
+                    match value {
+                        Value::Str(x) => {
+                            self.state = States::StrInit(x.as_str());
+                            break;
                         }
-                        // Fall through
-                        self.state = States::FlushBuffer;
+                        Value::Binary(x) => {
+                            self.state = States::BinInit(x);
+                            break;
+                        }
+                        Value::Struct(x) => {
+                            self.state = States::StructInit(x); 
+                            break;
+                        }
+                        Value::Array(x) => {
+                            self.state = States::ArrayInit(x); 
+                            break;
+                        }
+                        Value::Bool(x) => {
+                            if written == dst.len() { return Ok(written); }
+                            written += write_bool(x, &mut dst[written..]).unwrap();
+                            self.state = States::StackPop;
+                            break;
+                        }
+                        Value::Null => {
+                            if written == dst.len() { return Ok(written); }
+                            written += write_null(&mut self.source.buffer).unwrap();
+                            self.state = States::StackPop;
+                            break;
+                        }
+                        Value::Int(x) => {
+                            let cnt = write_int(x, &mut self.source.buffer).unwrap();
+                            self.source.prepare(cnt);
+                            self.state = States::FlushBuffer;
+                        }
+                        Value::Double(x) => {
+                            let cnt = write_double(x, &mut self.source.buffer).unwrap();
+                            self.source.prepare(cnt);
+                            self.state = States::FlushBuffer;
+                        }
+                        Value::DateTime(x) => {
+                            let cnt = write_datetime(x, &mut self.source.buffer).unwrap();
+                            self.source.prepare(cnt);
+                            self.state = States::FlushBuffer;
+                        }
+                        _ => { return Err("Unknown type"); }
                     }
+                }
+
+
+
                     
-                    FlushBuffer => {
-                        written += self.source.flush(dst, written);
-                        if !self.source.is_empty() {
-                            return Ok(written);
+                    let frame = self.stack.last();
+                    match frame {    
+
+                        
+                        },
+                        Frame::Struct => {
+                            self.state = States::StructInit;
+                            break;
+                        },                                
+                        Frame::Array => {
+                            self.state = States::ArrayInit;
+                            break;
                         }
+                    }    
 
-                        // Fall through
-                        self.state = States::StackPop;
+                    // Fall through
+                    self.state = States::FlushBuffer;
+                }
+                
+                FlushBuffer => {
+                    written += self.source.flush(dst, written);
+                    if !self.source.is_empty() {
+                        return Ok(written);
                     }
-
-                    StackPop => {
-                        self.stack.pop();
-                        if self.stack.len() == 0 {
-                            return Ok(written);
+                 // Fall through
+                    self.state = States::StackPop;
+                }
+             StackPop => {
+                    self.stack.pop();
+                    if self.stack.len() == 0 {
+                        return Ok(written);
+                    }
+                    let frame = self.stack.last().unwrap();
+                    match frame.value {
+                        Array => {
+                            if let it = frame.iter.next();
+                            self.state = States::ArrayItem;
                         }
-                        let frame = self.stack.last().unwrap();
-                        match frame.value {
-                            Array => {
-                                frame.vec_iter.unwrap().next();
-                                self.state = States::ArrayItem;
-                            }
-                            Struct => {
-                                frame.struct_iter.unwrap().next();
-                                self.state = States::StructItem;
-                            }
-                            _ => {
-                                self.state = States::Value;
-                            }
+                        Struct => {
+                            frame.iter.next();
+                            self.state = States::StructItem;
                         }
-                    }
-
-                    ArrayInit => {
-                        let v = match value {
-                            Value::Array(val) => val,
-                            _ => return Err("Unknown type"),
-                        };
-                        let cnt = write_head(ARRAY_ID, v.len(), &mut self.source.buffer).unwrap();
-                        self.source.prepare(cnt);
-                        self.state = States::ArrayHead;
-                        continue;
-                    }
-
-                    ArrayHead => {
-                        written += self.source.flush(dst, written);
-                        if !self.source.is_empty() { return Ok(written) }
-                        self.state = States::ArrayItem;
-                    }
-
-                    ArrayItem => {
-                        let v = frame.vec_iter.unwrap().next();
-                        match v {
-                            None => {
-                                self.state = States::StackPop;
-                                continue;
-                            }
-                            Some(x) => {
-                                self.stack.push(Frame::new(&x));
-                                self.state = States::Value;
-                                continue;
-                            }
+                        _ => {
+                            self.state = States::Value;
                         }
                     }
                 }
-            }
-        }
-
-        Ok(written)
+             ArrayInit => {
+                    let v = match value {
+                        Value::Array(val) => val,
+                        _ => return Err("Unknown type"),
+                    };
+                    let cnt = write_head(ARRAY_ID, v.len(), &mut self.source.buffer).unwrap();
+                    self.source.prepare(cnt);
+                    self.state = States::ArrayHead;
+                    continue;
+                }
+             ArrayHead => {
+                    written += self.source.flush(dst, written);
+                    if !self.source.is_empty() { return Ok(written) }
+                    self.state = States::ArrayItem;
+                }
+             ArrayItem => {
+                    let v = frame.iter.next();
+                    match v {
+                        None => {
+                            self.state = States::StackPop;
+                            continue;
+                        }
+                        Some(x) => {
+                            self.stack.push(Frame::new(&x));
+                            self.state = States::Value;
+                            continue;
+                        }
+                    }
+                }
+                  }     Ok(written)
     }
 
     fn write_call(&mut self, dst: &mut [u8], name: &str) -> Result<usize, &str> {
@@ -503,8 +493,7 @@ impl<'a> Serializer<'a> {
         loop {
             match &(self.state) {
                 Init => {
-                    self.stack.push(Frame::new(value));
-                    self.state = States::Value;
+                    self.state = States::Value(value);
                 }
                 _ => {
                     return self.write_v(dst, 0);
