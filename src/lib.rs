@@ -167,14 +167,14 @@ fn write_datetime(val: &DateTime, dst: &mut [u8]) -> Result<usize, &'static str>
 }
 
 /** Writes tag and length for string, binary, array and struct types */
-fn write_head(frpsType: u8, size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
+fn write_head(frps_type: u8, size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
     let octets = get_octets(size.try_into().unwrap());
 
     if dst.len() < (octets + 2) {
         return Err("not enought space");
     }
 
-    dst[0] = frpsType | u8::try_from(octets).unwrap();
+    dst[0] = frps_type | u8::try_from(octets).unwrap();
     // this works only for little-endian systems
     LittleEndian::write_u64(&mut dst[1..], size as u64);
 
@@ -182,7 +182,7 @@ fn write_head(frpsType: u8, size: usize, dst: &mut [u8]) -> Result<usize, &'stat
 }
 
 /** Writes head of struct key */
-fn write_key_head(size: usize, dst: &mut Vec<u8>) -> Result<usize, &'static str> {
+fn write_key_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 1 {
         return Err("not enought space");
     }
@@ -213,14 +213,14 @@ enum States<'a> {
     StrInit(&'a str),
     StrHead(&'a str),
     StrValue(&'a str),
-
     BinInit(&'a [u8]),
+
     BinHead(&'a [u8]),
     BinValue(&'a [u8]),
     StructInit(&'a HashMap<String, Value>),
     StructHead(&'a HashMap<String, Value>),
     StructItem(std::collections::hash_map::Iter<'a, String, Value>),
-    StructItemKey(std::collections::hash_map::Iter<'a, String, Value>),
+    StructItemKey(&'a String),
 
     ArrayInit(&'a Vec<Value>),
     ArrayHead(&'a Vec<Value>),
@@ -236,16 +236,6 @@ enum States<'a> {
     FaultMsg,
     FaultMsgData,
 }
-
-// impl<'a> Frame<'a> {
-//     fn new(value: &'a Value) -> Frame<'a> {
-//         match value {
-//             Value::Array(v) => Frame::Array(v.iter()),
-//             Value::Struct(v) => Frame::Struct(v.iter()),
-//             _ => Frame::Value(value),
-//         }
-//     }
-// }
 
 /** Represent either temporary buffer
  *   or keep state how many bytes was copied from value parametr source
@@ -265,8 +255,12 @@ impl Source {
 
     fn flush(&mut self, dst: &mut [u8], written: usize) -> usize {
         let write = cmp::min(dst.len() - written, self.len - self.pos);
+
         if write > 0 {
-            dst[written..].copy_from_slice(&self.buffer[self.pos..self.pos + write]);
+            // make slices same size for copy_from_slice
+            let d = &mut dst[written..(written + write)];
+            let s = &self.buffer[self.pos..(self.pos + write)];
+            d.copy_from_slice(s);
             self.pos += write;
         }
         write
@@ -299,13 +293,6 @@ impl<'a> Serializer<'a> {
         self.stack.push(States::Init);
     }
 
-    /// Change stack top to new state in @param new_state
-    fn state(&mut self, new_state: States<'a>) {
-        if let Some(_curr_state) = self.stack.last_mut() {
-            *_curr_state = new_state
-        }
-    }
-
     fn write_v(&mut self, dst: &mut [u8], written: usize) -> Result<usize, &'static str> {
         let mut written = written;
 
@@ -318,14 +305,14 @@ impl<'a> Serializer<'a> {
                     Value::Array(x) => *state = States::ArrayInit(&x),
                     Value::Bool(x) => {
                         if written == dst.len() {
-                            return Ok(written);
+                            return Ok(written); // dst buffer is full
                         }
                         written += write_bool(*x, &mut dst[written..]).unwrap();
                         *state = States::StackPop;
                     }
                     Value::Null => {
                         if written == dst.len() {
-                            return Ok(written);
+                            return Ok(written); // dst buffer is full
                         }
                         written += write_null(&mut self.source.buffer).unwrap();
                         *state = States::StackPop;
@@ -346,16 +333,60 @@ impl<'a> Serializer<'a> {
                         *state = States::FlushBuffer;
                     }
                 },
+
                 States::FlushBuffer => {
                     written += self.source.flush(dst, written);
                     if !self.source.is_empty() {
-                        return Ok(written);
+                        return Ok(written); // dst buffer is full
                     }
                     *state = States::StackPop;
                 }
                 States::StackPop => {
                     self.stack.pop();
                 }
+
+                // String
+                States::StrInit(x) => {
+                    let cnt = write_head(STRING_ID, x.len(), &mut self.source.buffer).unwrap();
+                    self.source.prepare(cnt);
+                    *state = States::StrHead(&x);
+                }
+                States::StrHead(x) => {
+                    written += self.source.flush(dst, written);
+                    if !self.source.is_empty() {
+                        return Ok(written); // dst buffer is full
+                    }
+                    // prepare string value itself
+                    self.source.prepare(x.len());
+                    *state = States::StrValue(&x);
+                }
+                States::StrValue(x) => {
+                    written +=
+                        Serializer::copy_next_chunk(dst, written, &mut self.source, x.as_bytes());
+                    *state = States::StackPop;
+                }
+
+                // Binary
+                States::BinInit(x) => {
+                    let cnt = write_head(BOOL_ID, x.len(), &mut self.source.buffer).unwrap();
+                    self.source.prepare(cnt);
+                    *state = States::BinHead(&x);
+                }
+                States::BinHead(x) => {
+                    written += self.source.flush(dst, written);
+                    if !self.source.is_empty() {
+                        return Ok(written); // dst buffer is full
+                    }
+                    // prepare string value itself
+                    self.source.prepare(x.len());
+                    *state = States::BinValue(&x);
+                }
+                States::BinValue(x) => {
+                    written += Serializer::copy_next_chunk(dst, written, &mut self.source, x);
+                    *state = States::StackPop;
+                }
+
+                // Array
                 States::ArrayInit(v) => {
                     let cnt = write_head(ARRAY_ID, v.len(), &mut self.source.buffer).unwrap();
                     self.source.prepare(cnt);
@@ -364,7 +395,7 @@ impl<'a> Serializer<'a> {
                 States::ArrayHead(v) => {
                     written += self.source.flush(dst, written);
                     if !self.source.is_empty() {
-                        return Ok(written);
+                        return Ok(written); // dst buffer is full
                     }
                     *state = States::ArrayItem(v.iter());
                 }
@@ -372,7 +403,48 @@ impl<'a> Serializer<'a> {
                     None => *state = States::StackPop,
                     Some(x) => self.stack.push(States::Value(&x)),
                 },
-                _ => return Err("Invalid state"),
+
+                // Struct
+                States::StructInit(v) => {
+                    let cnt = write_head(STRUCT_ID, v.len(), &mut self.source.buffer).unwrap();
+                    self.source.prepare(cnt);
+                    *state = States::StructHead(&v);
+                }
+                States::StructHead(v) => {
+                    written += self.source.flush(dst, written);
+                    if !self.source.is_empty() {
+                        return Ok(written); // dst buffer is full
+                    }
+                    *state = States::StructItem(v.iter());
+                }
+                States::StructItem(iter) => {
+                    match iter.next() {
+                        None => *state = States::StackPop,
+                        Some((key, x)) => {
+                            // check key length
+                            if key.len() > 255 {
+                                return Err("Key is too long");
+                            }
+                            if written == dst.len() {
+                                return Ok(written); // dst buffer is full
+                            }
+                            written += write_key_head(key.len(), &mut dst[written..]).unwrap();
+                            self.source.prepare(key.len());
+
+                            self.stack.push(States::Value(x));
+                            self.stack.push(States::StructItemKey(key));
+                        }
+                    }
+                }
+                States::StructItemKey(key) => {
+                    written +=
+                        Serializer::copy_next_chunk(dst, written, &mut self.source, key.as_bytes());
+                    if !self.source.is_empty() {
+                        return Ok(written); // dst buffer is full
+                    }
+                    *state = States::StackPop;
+                }
+                _ => return Err("Invalid state")
             } // states match
         } // stack iteration
         Ok(written)
@@ -442,24 +514,15 @@ impl<'a> Serializer<'a> {
     ) -> usize {
         let write = cmp::min(dst.len() - written, src_state.len - src_state.pos);
         if write > 0 {
-            dst[written..].copy_from_slice(&src[src_state.pos..src_state.pos + write]);
+            // make slices same size for copy_from_slice
+            let d = &mut dst[written..(written + write)];
+            let s = &src[src_state.pos..src_state.pos + write];
+            d.copy_from_slice(s);
             src_state.pos += write;
         }
 
         write
     }
-}
-
-fn serialize() -> Result<usize, &'static str> {
-
-    let val = Value::Int(1224);
-
-    let mut serializer = Serializer::new();
-    let mut buffer: [u8; 256] = [0; 256];
-
-    let cnt = serializer.write_call(&mut buffer, "server.stat").unwrap();
-    serializer.reset();
-    return serializer.write_value(&mut buffer[cnt..], &val);
 }
 
 #[cfg(test)]
@@ -472,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn it_works() {
+    fn wire_format() {
         let mut buffer: [u8; 256] = [0; 256];
 
         let cnt = write_magic(1u8, &mut buffer).unwrap();
@@ -490,5 +553,43 @@ mod tests {
 
         let cnt = write_double(1024123.123, &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 9);
+    }
+
+    #[test]
+    fn serializer() {
+        let mut serializer = Serializer::new();
+        let mut buffer: [u8; 256] = [0; 256];
+
+        let mut written = 0;
+        let cnt = serializer.write_call(&mut buffer, "server.stat");
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
+
+        serializer.reset();
+        let val = Value::Int(1224);
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
+
+        serializer.reset();
+        let val = Value::Double(12.24);
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
+
+        serializer.reset();
+        let val = Value::Str(String::from("Ahoj tady string"));
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
+
+        serializer.reset();
+        let val = Value::Array(vec![
+            Value::Int(1),
+            Value::Str(String::from("Ahoj tady string")),
+        ]);
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
     }
 }
