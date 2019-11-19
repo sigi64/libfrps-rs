@@ -72,7 +72,7 @@ struct DateTime {
 /** Writes protocol header and message type
  * @return Number of bytes written or zero when there is not enough room
  */
-fn write_magic(msg_type: u8, dst: &mut [u8]) -> Result<usize, &str> {
+fn write_magic(msg_type: u8, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 5 {
         return Err("not enought space");
     }
@@ -85,7 +85,7 @@ fn write_magic(msg_type: u8, dst: &mut [u8]) -> Result<usize, &str> {
 }
 
 /** Writes tag and bool value */
-fn write_bool(val: bool, dst: &mut [u8]) -> Result<usize, &str> {
+fn write_bool(val: bool, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 1 {
         return Err("not enought space");
     }
@@ -95,7 +95,7 @@ fn write_bool(val: bool, dst: &mut [u8]) -> Result<usize, &str> {
 }
 
 /** Writes tag and null value */
-fn write_null(dst: &mut [u8]) -> Result<usize, &str> {
+fn write_null(dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 1 {
         return Err("not enought space");
     }
@@ -104,7 +104,7 @@ fn write_null(dst: &mut [u8]) -> Result<usize, &str> {
 }
 
 /** Writes tag and integer value */
-fn write_int(val: i64, dst: &mut [u8]) -> Result<usize, &str> {
+fn write_int(val: i64, dst: &mut [u8]) -> Result<usize, &'static str> {
     let octets = if val >= 0 {
         get_octets(u64::try_from(val).unwrap())
     } else {
@@ -125,7 +125,7 @@ fn write_int(val: i64, dst: &mut [u8]) -> Result<usize, &str> {
 }
 
 /** Writes tag and double value */
-fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &str> {
+fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 9 {
         return Err("not enought space");
     }
@@ -136,7 +136,7 @@ fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &str> {
 }
 
 /** Writes tag and datetime value */
-fn write_datetime(val: DateTime, dst: &mut [u8]) -> Result<usize, &str> {
+fn write_datetime(val: &DateTime, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 11 {
         return Err("not enought space");
     }
@@ -167,7 +167,7 @@ fn write_datetime(val: DateTime, dst: &mut [u8]) -> Result<usize, &str> {
 }
 
 /** Writes tag and length for string, binary, array and struct types */
-fn write_head(frpsType: u8, size: usize, dst: &mut [u8]) -> Result<usize, &str> {
+fn write_head(frpsType: u8, size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
     let octets = get_octets(size.try_into().unwrap());
 
     if dst.len() < (octets + 2) {
@@ -182,7 +182,7 @@ fn write_head(frpsType: u8, size: usize, dst: &mut [u8]) -> Result<usize, &str> 
 }
 
 /** Writes head of struct key */
-fn write_key_head(size: usize, dst: &mut Vec<u8>) -> Result<usize, &str> {
+fn write_key_head(size: usize, dst: &mut Vec<u8>) -> Result<usize, &'static str> {
     if dst.len() < 1 {
         return Err("not enought space");
     }
@@ -217,16 +217,14 @@ enum States<'a> {
     BinInit(&'a [u8]),
     BinHead(&'a [u8]),
     BinValue(&'a [u8]),
-
     StructInit(&'a HashMap<String, Value>),
     StructHead(&'a HashMap<String, Value>),
-    StructMembers(&'a HashMap<String, Value>),
-    StructItem(&'a HashMap<String, Value>),
-    StructItemKey(&'a HashMap<String, Value>),
+    StructItem(std::collections::hash_map::Iter<'a, String, Value>),
+    StructItemKey(std::collections::hash_map::Iter<'a, String, Value>),
 
     ArrayInit(&'a Vec<Value>),
     ArrayHead(&'a Vec<Value>),
-    ArrayItem(&'a Vec<Value>),
+    ArrayItem(std::slice::Iter<'a, Value>),
 
     CallHead,
     CallMethod,
@@ -239,21 +237,15 @@ enum States<'a> {
     FaultMsgData,
 }
 
-enum Frame<'a> {
-    //Other(&'a Value),
-    Array(std::slice::Iter<'a, Value>),
-    Struct(std::collections::hash_map::Iter<'a, String, Value>)
-}
-
-impl<'a> Frame<'a> {
-    fn new(value: &'a Value) -> Frame<'a> {
-        match value {
-            Value::Array(v) => Frame::Array(v.iter()),
-            Value::Struct(v) => Frame::Struct(v.iter()), 
-            _ => panic!("Value is not array or struct"),
-        }
-    }
-}
+// impl<'a> Frame<'a> {
+//     fn new(value: &'a Value) -> Frame<'a> {
+//         match value {
+//             Value::Array(v) => Frame::Array(v.iter()),
+//             Value::Struct(v) => Frame::Struct(v.iter()),
+//             _ => Frame::Value(value),
+//         }
+//     }
+// }
 
 /** Represent either temporary buffer
  *   or keep state how many bytes was copied from value parametr source
@@ -286,17 +278,14 @@ impl Source {
 }
 
 struct Serializer<'a> {
-    state: States<'a>,
-    stack: Vec<Frame<'a>>,
-
+    stack: Vec<States<'a>>,
     source: Source, // colecting buffer
 }
 
 impl<'a> Serializer<'a> {
     fn new() -> Serializer<'a> {
         Serializer {
-            state: States::Init,
-            stack: Vec::new(),
+            stack: vec![States::Init],
             source: Source {
                 len: 0,
                 pos: 0,
@@ -306,165 +295,107 @@ impl<'a> Serializer<'a> {
     }
 
     fn reset(&mut self) {
-        self.state = States::Init;
         self.stack.clear();
+        self.stack.push(States::Init);
     }
 
-    fn write_v(&mut self, dst: &mut [u8], written: usize) -> Result<usize, &str> {
+    /// Change stack top to new state in @param new_state
+    fn state(&mut self, new_state: States<'a>) {
+        if let Some(_curr_state) = self.stack.last_mut() {
+            *_curr_state = new_state
+        }
+    }
+
+    fn write_v(&mut self, dst: &mut [u8], written: usize) -> Result<usize, &'static str> {
         let mut written = written;
-        while self.stack.len() > 0 {                            
-            match &(self.state) {
-                States::Value(&value) => {
-                    match value {
-                        Value::Str(x) => {
-                            self.state = States::StrInit(x.as_str());
-                            break;
+
+        while let Some(state) = self.stack.last_mut() {
+            match state {
+                States::Value(value) => match value {
+                    Value::Str(x) => *state = States::StrInit(&x.as_str()),
+                    Value::Binary(x) => *state = States::BinInit(&x),
+                    Value::Struct(x) => *state = States::StructInit(&x),
+                    Value::Array(x) => *state = States::ArrayInit(&x),
+                    Value::Bool(x) => {
+                        if written == dst.len() {
+                            return Ok(written);
                         }
-                        Value::Binary(x) => {
-                            self.state = States::BinInit(x);
-                            break;
-                        }
-                        Value::Struct(x) => {
-                            self.state = States::StructInit(x); 
-                            break;
-                        }
-                        Value::Array(x) => {
-                            self.state = States::ArrayInit(x); 
-                            break;
-                        }
-                        Value::Bool(x) => {
-                            if written == dst.len() { return Ok(written); }
-                            written += write_bool(x, &mut dst[written..]).unwrap();
-                            self.state = States::StackPop;
-                            break;
-                        }
-                        Value::Null => {
-                            if written == dst.len() { return Ok(written); }
-                            written += write_null(&mut self.source.buffer).unwrap();
-                            self.state = States::StackPop;
-                            break;
-                        }
-                        Value::Int(x) => {
-                            let cnt = write_int(x, &mut self.source.buffer).unwrap();
-                            self.source.prepare(cnt);
-                            self.state = States::FlushBuffer;
-                        }
-                        Value::Double(x) => {
-                            let cnt = write_double(x, &mut self.source.buffer).unwrap();
-                            self.source.prepare(cnt);
-                            self.state = States::FlushBuffer;
-                        }
-                        Value::DateTime(x) => {
-                            let cnt = write_datetime(x, &mut self.source.buffer).unwrap();
-                            self.source.prepare(cnt);
-                            self.state = States::FlushBuffer;
-                        }
-                        _ => { return Err("Unknown type"); }
+                        written += write_bool(*x, &mut dst[written..]).unwrap();
+                        *state = States::StackPop;
                     }
-                }
-
-
-
-                    
-                    let frame = self.stack.last();
-                    match frame {    
-
-                        
-                        },
-                        Frame::Struct => {
-                            self.state = States::StructInit;
-                            break;
-                        },                                
-                        Frame::Array => {
-                            self.state = States::ArrayInit;
-                            break;
+                    Value::Null => {
+                        if written == dst.len() {
+                            return Ok(written);
                         }
-                    }    
-
-                    // Fall through
-                    self.state = States::FlushBuffer;
-                }
-                
-                FlushBuffer => {
+                        written += write_null(&mut self.source.buffer).unwrap();
+                        *state = States::StackPop;
+                    }
+                    Value::Int(x) => {
+                        let cnt = write_int(*x, &mut self.source.buffer).unwrap();
+                        self.source.prepare(cnt);
+                        *state = States::FlushBuffer;
+                    }
+                    Value::Double(x) => {
+                        let cnt = write_double(*x, &mut self.source.buffer).unwrap();
+                        self.source.prepare(cnt);
+                        *state = States::FlushBuffer;
+                    }
+                    Value::DateTime(x) => {
+                        let cnt = write_datetime(x, &mut self.source.buffer).unwrap();
+                        self.source.prepare(cnt);
+                        *state = States::FlushBuffer;
+                    }
+                },
+                States::FlushBuffer => {
                     written += self.source.flush(dst, written);
                     if !self.source.is_empty() {
                         return Ok(written);
                     }
-                 // Fall through
-                    self.state = States::StackPop;
+                    *state = States::StackPop;
                 }
-             StackPop => {
+                States::StackPop => {
                     self.stack.pop();
-                    if self.stack.len() == 0 {
-                        return Ok(written);
-                    }
-                    let frame = self.stack.last().unwrap();
-                    match frame.value {
-                        Array => {
-                            if let it = frame.iter.next();
-                            self.state = States::ArrayItem;
-                        }
-                        Struct => {
-                            frame.iter.next();
-                            self.state = States::StructItem;
-                        }
-                        _ => {
-                            self.state = States::Value;
-                        }
-                    }
                 }
-             ArrayInit => {
-                    let v = match value {
-                        Value::Array(val) => val,
-                        _ => return Err("Unknown type"),
-                    };
+                States::ArrayInit(v) => {
                     let cnt = write_head(ARRAY_ID, v.len(), &mut self.source.buffer).unwrap();
                     self.source.prepare(cnt);
-                    self.state = States::ArrayHead;
-                    continue;
+                    *state = States::ArrayHead(&v);
                 }
-             ArrayHead => {
-                    written += self.source.flush(dst, written);
-                    if !self.source.is_empty() { return Ok(written) }
-                    self.state = States::ArrayItem;
-                }
-             ArrayItem => {
-                    let v = frame.iter.next();
-                    match v {
-                        None => {
-                            self.state = States::StackPop;
-                            continue;
-                        }
-                        Some(x) => {
-                            self.stack.push(Frame::new(&x));
-                            self.state = States::Value;
-                            continue;
-                        }
-                    }
-                }
-                  }     Ok(written)
-    }
-
-    fn write_call(&mut self, dst: &mut [u8], name: &str) -> Result<usize, &str> {
-        let mut written: usize = 0;
-
-        loop {
-            match &(self.state) {
-                Init => {
-                    let cnt = write_magic(CALL_ID, &mut self.source.buffer).unwrap();
-                    self.source.prepare(cnt);
-                    self.state = States::CallHead;
-                }
-                CallHead => {
+                States::ArrayHead(v) => {
                     written += self.source.flush(dst, written);
                     if !self.source.is_empty() {
                         return Ok(written);
                     }
+                    *state = States::ArrayItem(v.iter());
+                }
+                States::ArrayItem(iter) => match iter.next() {
+                    None => *state = States::StackPop,
+                    Some(x) => self.stack.push(States::Value(&x)),
+                },
+                _ => return Err("Invalid state"),
+            } // states match
+        } // stack iteration
+        Ok(written)
+    }
 
+    fn write_call(&mut self, dst: &mut [u8], name: &str) -> Result<usize, &'static str> {
+        let mut written: usize = 0;
+
+        while let Some(state) = self.stack.last_mut() {
+            match state {
+                States::Init => {
+                    let cnt = write_magic(CALL_ID, &mut self.source.buffer).unwrap();
+                    self.source.prepare(cnt);
+                    *state = States::CallHead;
+                }
+                States::CallHead => {
+                    written += self.source.flush(dst, written);
+                    if !self.source.is_empty() {
+                        return Ok(written);
+                    }
                     if name.len() > 255 {
                         return Err("method name too long");
                     }
-
                     if written == dst.len() {
                         return Ok(written);
                     }
@@ -473,33 +404,34 @@ impl<'a> Serializer<'a> {
                     dst[written] = name.len() as u8;
                     written += 1;
                     self.source.prepare(name.len());
-                    self.state = States::CallMethod;
+                    *state = States::CallMethod;
                 }
-                CallMethod => {
+                States::CallMethod => {
                     written += Serializer::copy_next_chunk(
                         dst,
                         written,
                         &mut self.source,
                         &name.as_bytes(),
                     );
-                    break;
+                    *state = States::StackPop;
                 }
+                States::StackPop => {
+                    self.stack.pop();
+                }
+                _ => return Err("Invalid state"),
             }
         }
         Ok(written)
     }
 
-    fn write_value(&mut self, dst: &mut [u8], value: &'a Value) -> Result<usize, &str> {
-        loop {
-            match &(self.state) {
-                Init => {
-                    self.state = States::Value(value);
-                }
-                _ => {
-                    return self.write_v(dst, 0);
-                }
+    fn write_value(&mut self, dst: &mut [u8], value: &'a Value) -> Result<usize, &'static str> {
+        while let Some(state) = self.stack.last_mut() {
+            match state {
+                States::Init => *state = States::Value(&value),
+                _ => return self.write_v(dst, 0),
             }
         }
+        Ok(0)
     }
 
     fn copy_next_chunk(
@@ -518,16 +450,16 @@ impl<'a> Serializer<'a> {
     }
 }
 
-fn serialize(buf: &mut [u8], val: &Value) -> Result<usize, String> {
-    let mut serializer = Serializer::new();
+fn serialize() -> Result<usize, &'static str> {
 
+    let val = Value::Int(1224);
+
+    let mut serializer = Serializer::new();
     let mut buffer: [u8; 256] = [0; 256];
 
     let cnt = serializer.write_call(&mut buffer, "server.stat").unwrap();
     serializer.reset();
-    let cnt = serializer.write_value(&mut buffer[cnt..], val);
-
-    Ok(0)
+    return serializer.write_value(&mut buffer[cnt..], &val);
 }
 
 #[cfg(test)]
