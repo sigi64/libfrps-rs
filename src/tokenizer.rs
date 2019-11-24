@@ -64,7 +64,7 @@ impl<'a> SourcePtr<'a> {
 
     /// return slice for unconsumed part of data with `cnt` lenght
     fn data(&self, cnt: usize) -> &[u8] {
-        assert!(self.pos + cnt < self.src.len());
+        assert!(self.pos + cnt <= self.src.len());
         return &self.src[self.pos..self.pos + cnt];
     }
 
@@ -78,6 +78,10 @@ impl<'a> SourcePtr<'a> {
     fn consumed(&self) -> usize {
         assert_eq!(self.pos, self.src.len());
         return self.src.len();
+    }
+
+    fn is_all_consumed(&self) -> bool {
+        return self.pos == self.src.len();
     }
 }
 
@@ -146,12 +150,13 @@ impl Tokenizer {
                 States::Init => {
                     // first 4 bytes is header with magic and version
                     if !self.buffer.consume(4, &mut src) {
+                        assert!(src.is_all_consumed());
                         return Ok(src.consumed());
                     }
 
                     // check FRPC magic and version
-                    if self.buffer.data[0] != 0xca || self.buffer.data[0] != 0x11 {
-                        return Err("Invalid magic expected 0xca 0x11");
+                    if self.buffer.data[0] != 0xca || self.buffer.data[1] != 0x11 {
+                        return Err("Invalid magic expected 0xCA11");
                     }
 
                     self.version_major = self.buffer.data[2];
@@ -168,19 +173,14 @@ impl Tokenizer {
                 States::MessageType => {
                     // first byte is message type
                     if !self.buffer.consume(1, &mut src) {
+                        assert!(src.is_all_consumed());
                         return Ok(src.consumed());
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
-                        CALL_ID => {
-                            self.state = States::CallNameSize;
-                        }
-                        RESPOSE_ID => {
-                            self.state = States::Response;
-                        }
-                        FAULT_RESPOSE_ID => {
-                            self.state = States::Response;
-                        }
+                        CALL_ID =>  self.state = States::CallNameSize,
+                        RESPOSE_ID => self.state = States::Response,
+                        FAULT_RESPOSE_ID => self.state = States::Response,
                         _ => return Err("Invalid message type"),
                     }
 
@@ -190,6 +190,7 @@ impl Tokenizer {
                 States::CallNameSize => {
                     // first byte is method name lenght
                     if !self.buffer.consume(1, &mut src) {
+                        assert!(src.is_all_consumed());
                         return Ok(src.consumed());
                     }
 
@@ -203,9 +204,11 @@ impl Tokenizer {
                 }
 
                 States::CallName((lenght, mut procesed)) => {
+                    // read method name
                     let avail = cmp::min(lenght - procesed, src.available());
                     if avail == 0 {
-                        return Ok(src.available());
+                        assert!(src.is_all_consumed());
+                        return Ok(src.consumed());
                     }
 
                     let run = cb.call(str::from_utf8(src.data(avail)).unwrap(), avail, lenght);
@@ -214,8 +217,9 @@ impl Tokenizer {
                     src.advance(avail);
 
                     if !run || lenght != procesed {
-                        self.state = States::CallName((lenght, procesed));
-                        return Ok(src.available());
+                        // self.state = States::CallName((lenght, procesed));
+                        assert!(src.is_all_consumed());
+                        return Ok(src.consumed());
                     }
 
                     self.state = States::Params;
@@ -225,6 +229,8 @@ impl Tokenizer {
                 States::Response => {}
 
                 States::FaultInit => {}
+
+                _ => return Err("Invalid state")
             }
         }
 
