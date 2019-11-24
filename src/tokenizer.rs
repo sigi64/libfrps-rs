@@ -18,7 +18,7 @@ pub trait Callback {
     fn error(&mut self);
 
     /* Stop on false, continue on true */
-    fn version(&mut self) -> bool;
+    fn version(&mut self, major_version: u8, minor_version: u8) -> bool;
 
     /* Stop on false, continue on true */
     fn call(&mut self, method: &str, avail: usize, lenght: usize) -> bool;
@@ -156,6 +156,10 @@ impl Tokenizer {
 
                     self.version_major = self.buffer.data[2];
                     self.version_minor = self.buffer.data[3];
+
+                    if !cb.version(self.version_major, self.version_minor) {
+                        return Err("Invalid version")
+                    }
 
                     self.state = States::MessageType;
                     self.buffer.reset();
