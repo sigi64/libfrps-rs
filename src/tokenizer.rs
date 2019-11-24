@@ -1,44 +1,50 @@
 use std::cmp;
+use std::str;
 
 use crate::constants::*;
 
 enum States {
     Init,
     MessageType,
+    CallNameSize,
+    Response,
+    FaultInit,
+    CallName((usize, usize)), // method name length, processed
+    Params,
 }
 
 pub trait Callback {
     /** Parsing always stop after this callback return. */
-    fn error();
+    fn error(&mut self);
 
     /* Stop on false, continue on true */
-    fn version() -> bool;
+    fn version(&mut self) -> bool;
 
     /* Stop on false, continue on true */
-    fn call() -> bool;
+    fn call(&mut self, method: &str, avail: usize, lenght: usize) -> bool;
 
     /* Stop on false, continue on true */
-    fn response() -> bool;
+    fn response(&mut self) -> bool;
 
     /* Stop on false, continue on true */
-    fn fault() -> bool;
+    fn fault(&mut self) -> bool;
 
     /* Stop on false, continue on true */
-    fn stream_data() -> bool;
+    fn stream_data(&mut self) -> bool;
 
     /* Stop on false, continue on true */
-    fn null() -> bool;
+    fn null(&mut self) -> bool;
 
     /* Stop on false, continue on true */
-    fn boolean() -> bool;
-    fn double_number() -> bool;
-    fn datetime() -> bool;
-    fn binary() -> bool;
-    fn push_array() -> bool;
-    fn push_struct() -> bool; // pushMap
-    fn map_key() -> bool;
+    fn boolean(&mut self) -> bool;
+    fn double_number(&mut self) -> bool;
+    fn datetime(&mut self) -> bool;
+    fn binary(&mut self) -> bool;
+    fn push_array(&mut self) -> bool;
+    fn push_struct(&mut self) -> bool; // pushMap
+    fn map_key(&mut self) -> bool;
 
-    fn pop_context();
+    fn pop_context(&mut self);
 }
 
 struct SourcePtr<'a> {
@@ -116,6 +122,9 @@ impl Buffer {
 pub struct Tokenizer {
     state: States,
     buffer: Buffer,
+
+    version_major: u8,
+    version_minor: u8,
 }
 
 impl Tokenizer {
@@ -123,15 +132,19 @@ impl Tokenizer {
         Tokenizer {
             state: States::Init,
             buffer: Buffer::new(),
+
+            version_major: 0,
+            version_minor: 0,
         }
     }
 
-    pub fn parse<T: Callback>(&mut self, src: &[u8], cb: T) -> Result<usize, &'static str> {
+    pub fn parse<T: Callback>(&mut self, src: &[u8], cb: &mut T) -> Result<usize, &'static str> {
         let mut src = SourcePtr::new(src);
 
         loop {
             match self.state {
                 States::Init => {
+                    // first 4 bytes is header with magic and version
                     if !self.buffer.consume(4, &mut src) {
                         return Ok(src.consumed());
                     }
@@ -141,11 +154,73 @@ impl Tokenizer {
                         return Err("Invalid magic expected 0xca 0x11");
                     }
 
+                    self.version_major = self.buffer.data[2];
+                    self.version_minor = self.buffer.data[3];
+
                     self.state = States::MessageType;
                     self.buffer.reset();
                 }
 
-                States::MessageType => {}
+                States::MessageType => {
+                    // first byte is message type
+                    if !self.buffer.consume(1, &mut src) {
+                        return Ok(src.consumed());
+                    }
+
+                    match self.buffer.data[0] & TYPE_MASK {
+                        CALL_ID => {
+                            self.state = States::CallNameSize;
+                        }
+                        RESPOSE_ID => {
+                            self.state = States::Response;
+                        }
+                        FAULT_RESPOSE_ID => {
+                            self.state = States::Response;
+                        }
+                        _ => return Err("Invalid message type"),
+                    }
+
+                    self.buffer.reset();
+                }
+
+                States::CallNameSize => {
+                    // first byte is method name lenght
+                    if !self.buffer.consume(1, &mut src) {
+                        return Ok(src.consumed());
+                    }
+
+                    let length: usize = self.buffer.data[0] as usize;
+                    if length == 0 {
+                        return Err("Invalid lenght of method name");
+                    }
+
+                    self.state = States::CallName((length, 0));
+                    self.buffer.reset();
+                }
+
+                States::CallName((lenght, mut procesed)) => {
+                    let avail = cmp::min(lenght - procesed, src.available());
+                    if avail == 0 {
+                        return Ok(src.available());
+                    }
+
+                    let run = cb.call(str::from_utf8(src.data(avail)).unwrap(), avail, lenght);
+
+                    procesed += avail;
+                    src.advance(avail);
+
+                    if !run || lenght != procesed {
+                        self.state = States::CallName((lenght, procesed));
+                        return Ok(src.available());
+                    }
+
+                    self.state = States::Params;
+                }
+                States::Params => {}
+
+                States::Response => {}
+
+                States::FaultInit => {}
             }
         }
 
