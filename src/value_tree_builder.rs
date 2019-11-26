@@ -8,7 +8,8 @@ pub struct ValueTreeBuilder {
     pub was_response: bool,
     pub method_name: String,
 
-    pub stack: Vec<Value>,   
+    pub values: Vec<Value>,
+    stack: Vec<Value>,
 }
 
 impl ValueTreeBuilder {
@@ -18,6 +19,7 @@ impl ValueTreeBuilder {
             minor_version: 0,
             was_response: false,
             method_name: String::from(""),
+            values: vec![],
             stack: vec![],
         }
     }
@@ -65,6 +67,21 @@ impl Callback for ValueTreeBuilder {
     /* Stop on false, continue on true */
     fn null(&mut self) -> bool {
         true
+    }
+
+    fn integer(&mut self, v:i64) -> bool {
+        if self.stack.is_empty() {
+            self.values.push(Value::Int(v));
+            return true;
+        }
+
+        let last = self.stack.last_mut().unwrap();
+        match last {
+            Value::Array(arr) => arr.push(Value::Int(v)),
+            _ => return false,
+        }
+
+        return true;
     }
 
     /* Stop on false, continue on true */

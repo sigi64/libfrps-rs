@@ -4,7 +4,7 @@ mod tokenizer;
 mod value_tree_builder;
 
 pub use serialize::Value;
-pub use serialize::DateTime;
+pub use serialize::DateTimeVer30;
 pub use serialize::Serializer;
 
 pub use tokenizer::Tokenizer;

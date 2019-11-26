@@ -10,7 +10,10 @@ enum States {
     Response,
     FaultInit,
     CallName((usize, usize)), // method name length, processed
-    Params,
+    Value,
+    ValueComplete,
+    Integer1((bool, usize)), // negative value, octect cnt
+    Integer3(usize),         // octect cnt
 }
 
 pub trait Callback {
@@ -36,6 +39,7 @@ pub trait Callback {
     fn null(&mut self) -> bool;
 
     /* Stop on false, continue on true */
+    fn integer(&mut self, v: i64) -> bool;
     fn boolean(&mut self) -> bool;
     fn double_number(&mut self) -> bool;
     fn datetime(&mut self) -> bool;
@@ -124,7 +128,7 @@ impl Buffer {
 }
 
 pub struct Tokenizer {
-    state: States,
+    stack: Vec<States>,
     buffer: Buffer,
 
     version_major: u8,
@@ -134,7 +138,7 @@ pub struct Tokenizer {
 impl Tokenizer {
     pub fn new() -> Tokenizer {
         Tokenizer {
-            state: States::Init,
+            stack: vec![States::Init],
             buffer: Buffer::new(),
 
             version_major: 0,
@@ -145,8 +149,8 @@ impl Tokenizer {
     pub fn parse<T: Callback>(&mut self, src: &[u8], cb: &mut T) -> Result<usize, &'static str> {
         let mut src = SourcePtr::new(src);
 
-        loop {
-            match self.state {
+        while let Some(state) = self.stack.last_mut() {
+            match state {
                 States::Init => {
                     // first 4 bytes is header with magic and version
                     if !self.buffer.consume(4, &mut src) {
@@ -163,10 +167,10 @@ impl Tokenizer {
                     self.version_minor = self.buffer.data[3];
 
                     if !cb.version(self.version_major, self.version_minor) {
-                        return Err("Invalid version")
+                        return Err("Invalid version");
                     }
 
-                    self.state = States::MessageType;
+                    *state = States::MessageType;
                     self.buffer.reset();
                 }
 
@@ -178,9 +182,9 @@ impl Tokenizer {
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
-                        CALL_ID =>  self.state = States::CallNameSize,
-                        RESPOSE_ID => self.state = States::Response,
-                        FAULT_RESPOSE_ID => self.state = States::Response,
+                        CALL_ID => *state = States::CallNameSize,
+                        RESPOSE_ID => *state = States::Response,
+                        FAULT_RESPOSE_ID => *state = States::Response,
                         _ => return Err("Invalid message type"),
                     }
 
@@ -199,41 +203,142 @@ impl Tokenizer {
                         return Err("Invalid lenght of method name");
                     }
 
-                    self.state = States::CallName((length, 0));
+                    *state = States::CallName((length, 0));
                     self.buffer.reset();
                 }
 
-                States::CallName((lenght, mut procesed)) => {
+                States::CallName((lenght, procesed)) => {
                     // read method name
-                    let avail = cmp::min(lenght - procesed, src.available());
+                    let avail = cmp::min(*lenght - *procesed, src.available());
                     if avail == 0 {
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed());
                     }
 
-                    let run = cb.call(str::from_utf8(src.data(avail)).unwrap(), avail, lenght);
+                    let run = cb.call(str::from_utf8(src.data(avail)).unwrap(), avail, *lenght);
 
-                    procesed += avail;
+                    let procesed = *procesed + avail;
                     src.advance(avail);
 
-                    if !run || lenght != procesed {
-                        // self.state = States::CallName((lenght, procesed));
+                    if !run || *lenght != procesed {
+                        *state = States::CallName((*lenght, procesed));
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed());
                     }
 
-                    self.state = States::Params;
+                    *state = States::Value;
+                    self.buffer.reset();
                 }
-                States::Params => {}
+
+                States::Value => {
+                    // first byte is value type
+                    if !self.buffer.consume(1, &mut src) {
+                        assert!(src.is_all_consumed());
+                        return Ok(src.consumed());
+                    }
+
+                    match self.buffer.data[0] & TYPE_MASK {
+                        VINT_ID | INT_ID | U_VINT_ID => {
+                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+
+                            if self.version_major == 3 {
+                                *state = States::Integer3(octects);
+                            } else {
+                                // negative number
+                                let negative = (self.buffer.data[0] & VINT_ID) != 0;
+                                *state = States::Integer1((negative, octects));
+                            }
+                        }
+                        STRING_ID => {}
+                        BIN_ID => {}
+                        NULL_ID => {}
+                        STRUCT_ID => {}
+                        ARRAY_ID => {}
+                        BOOL_ID => {}
+                        DOUBLE_ID => {}
+                        DATETIME_ID => {}
+                        _ => return Err("Invalid type id"),
+                    }
+
+                    self.buffer.reset();
+                }
+
+                States::Integer3(octects) => {
+                    if !self.buffer.consume(*octects, &mut src) {
+                        assert!(src.is_all_consumed());
+                        return Ok(src.consumed());
+                    }
+
+                    let run = cb.integer(zigzag_decode(&self.buffer.data[0..*octects]));
+                    if !run {
+                        return Err("Invalid integer value");
+                    }
+                    *state = States::ValueComplete;
+                }
+
+                States::Integer1((negative, octects)) => {
+                    if !self.buffer.consume(*octects, &mut src) {
+                        assert!(src.is_all_consumed());
+                        return Ok(src.consumed());
+                    }
+
+                    let mut v = read_i64(&self.buffer.data[0..*octects]);
+                    if *negative {
+                        v *= -1;
+                    }
+
+                    let run = cb.integer(v);
+                    if !run {
+                        return Err("Invalid integer value");
+                    }
+                    *state = States::ValueComplete;
+                }
 
                 States::Response => {}
 
                 States::FaultInit => {}
 
-                _ => return Err("Invalid state")
+                States::ValueComplete => {
+                    self.buffer.reset();
+                    if src.is_all_consumed() {
+                        return Ok(src.consumed());
+                    }
+                }
+
+                _ => {
+                    return Err("Invalid state");
+                }
             }
         }
 
-        Ok(0)
+        return Ok(0);
     }
+}
+
+fn read_i64(s: &[u8]) -> i64 {
+    let mut tmp: [u8; 8] = [0; 8];
+
+    let cnt = cmp::min(tmp.len(), s.len());
+    if cnt > 0 {
+        // make slices same size for copy_from_slice
+        let d = &mut tmp[0..cnt];
+        d.copy_from_slice(s);
+    }
+    return i64::from_le_bytes(tmp);
+}
+
+/** Dencodes signed integer from unsigned,
+ * with positive values even and negative values odd
+ * starting around zero.
+ * This saves transfer space and unifies integer encoding.
+ * 0 -> 0
+ * 1 -> -1
+ * 2 -> 1
+ * 3 -> -2
+ * 4 -> 2
+ * ...
+ */
+fn zigzag_decode(s: &[u8]) -> i64 {
+    let n = read_i64(s);
+    return (n >> 1) ^ (-(n & 1));
 }

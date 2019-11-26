@@ -3,6 +3,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
+use std::{u64, i64};
 
 use crate::constants::*;
 
@@ -41,7 +42,30 @@ fn get_octets(number: u64) -> usize {
     return 7;
 }
 
-pub struct DateTime {
+/** Encodes signed integer as unsigned,
+ * with positive values even and negative values odd
+ * starting around zero.
+ * This saves transfer space and unifies integer encoding.
+ * 0 -> 0
+ * -1 -> 1
+ * 1 -> 2
+ * -2 -> 3
+ * 2 -> 4
+ * ...
+ */
+fn zigzag_encode(n:i64) -> u64 {
+    // the right shift has to be arithmetic
+    // negative numbers become all binary 1s
+    // positive numbers become all binary 0s
+    // effectively inverting bits of the result in
+    // case of negative number
+    let tmp = (n << 1) ^ (n >> 63);
+
+    return u64::from_le_bytes(tmp.to_le_bytes());
+}
+
+// FRPC version 3.0 format (unix_time is 64 bit)
+pub struct DateTimeVer30 {
     unix_time: u64,
     year: u16,
     month: u8,
@@ -62,8 +86,8 @@ fn write_magic(msg_type: u8, dst: &mut [u8]) -> Result<usize, &'static str> {
     }
     dst[0] = 0xCA;
     dst[1] = 0x11;
-    dst[2] = 2; // FRPC_MAJOR_VERSION
-    dst[3] = 1; // FRPC_MINOR_VERSION
+    dst[2] = 3; // FRPC_MAJOR_VERSION
+    dst[3] = 0; // FRPC_MINOR_VERSION
     dst[4] = msg_type;
     Ok(5)
 }
@@ -89,22 +113,15 @@ fn write_null(dst: &mut [u8]) -> Result<usize, &'static str> {
 
 /** Writes tag and integer value */
 fn write_int(val: i64, dst: &mut [u8]) -> Result<usize, &'static str> {
-    let octets = if val >= 0 {
-        get_octets(u64::try_from(val).unwrap())
-    } else {
-        get_octets(u64::try_from(-val).unwrap())
-    };
-
+    let val = zigzag_encode(val);
+    let octets = get_octets(val);
+    
     if dst.len() < (octets + 2) {
         return Err("not enought space");
     }
-    if val >= 0 {
-        dst[0] = U_VINT_ID | u8::try_from(octets).unwrap();
-        LittleEndian::write_i64(&mut dst[1..], val);
-    } else {
-        dst[0] = VINT_ID | u8::try_from(octets).unwrap();
-        LittleEndian::write_i64(&mut dst[1..], -val);
-    }
+    dst[0] = INT_ID | u8::try_from(octets).unwrap();
+    LittleEndian::write_u64(&mut dst[1..], val);
+
     Ok(octets + /*header*/ 1 + /*first byte*/1)
 }
 
@@ -120,7 +137,7 @@ fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &'static str> {
 }
 
 /** Writes tag and datetime value */
-fn write_datetime(val: &DateTime, dst: &mut [u8]) -> Result<usize, &'static str> {
+fn write_datetime(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 11 {
         return Err("not enought space");
     }
@@ -178,7 +195,7 @@ pub enum Value {
     Int(i64),
     Str(String),
     Null,
-    DateTime(DateTime),
+    DateTime(DateTimeVer30),
     Struct(HashMap<String, Value>),
     Array(Vec<Value>),
     Double(f64),
