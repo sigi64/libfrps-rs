@@ -14,6 +14,8 @@ enum States {
     ValueComplete,
     Integer1((bool, usize)), // negative value, octect cnt
     Integer3(usize),         // octect cnt
+    ArrayInit(usize),        // octect cnt 
+    ArrayItems(usize),       // array len
 }
 
 pub trait Callback {
@@ -40,15 +42,15 @@ pub trait Callback {
 
     /* Stop on false, continue on true */
     fn integer(&mut self, v: i64) -> bool;
-    fn boolean(&mut self) -> bool;
-    fn double_number(&mut self) -> bool;
+    fn boolean(&mut self, v: bool) -> bool;
+    fn double_number(&mut self, v: f64) -> bool;
     fn datetime(&mut self) -> bool;
-    fn binary(&mut self) -> bool;
-    fn push_array(&mut self) -> bool;
-    fn push_struct(&mut self) -> bool; // pushMap
-    fn map_key(&mut self) -> bool;
+    fn binary(&mut self, v: &[u8]) -> bool;
+    fn push_array(&mut self, len:usize) -> bool;
+    fn push_struct(&mut self, len: usize) -> bool; // pushMap
+    fn map_key(&mut self, key: &mut String) -> bool;
 
-    fn pop_context(&mut self);
+    fn pop_value(&mut self) -> bool;
 }
 
 struct SourcePtr<'a> {
@@ -239,6 +241,7 @@ impl Tokenizer {
 
                     match self.buffer.data[0] & TYPE_MASK {
                         VINT_ID | INT_ID | U_VINT_ID => {
+                            // get used octects
                             let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
 
                             if self.version_major == 3 {
@@ -253,7 +256,11 @@ impl Tokenizer {
                         BIN_ID => {}
                         NULL_ID => {}
                         STRUCT_ID => {}
-                        ARRAY_ID => {}
+                        ARRAY_ID => {
+                            // get array len used octects
+                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;                           
+                            *state = States::ArrayInit(octects);
+                        }
                         BOOL_ID => {}
                         DOUBLE_ID => {}
                         DATETIME_ID => {}
@@ -294,12 +301,31 @@ impl Tokenizer {
                     *state = States::ValueComplete;
                 }
 
+                States::ArrayInit(octects) => {
+                    // read array len    
+                    if !self.buffer.consume(*octects, &mut src) {
+                        assert!(src.is_all_consumed());
+                        return Ok(src.consumed());
+                    }
+
+                    let cnt = read_i64(&self.buffer.data[0..*octects]) as usize;
+                    
+                    let run = cb.push_array(cnt);
+                    if !run {
+                        return Err("Invalid array init");
+                    }
+
+                    self.stack.push(States::ArrayItems(cnt));
+                    self.buffer.reset();
+                }
+
                 States::Response => {}
 
                 States::FaultInit => {}
 
                 States::ValueComplete => {
                     self.buffer.reset();
+                    self.stack.pop();
                     if src.is_all_consumed() {
                         return Ok(src.consumed());
                     }
