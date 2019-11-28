@@ -249,11 +249,13 @@ struct Source {
 }
 
 impl Source {
+    /** Set how many bytes to copy either from source or buffer */
     fn prepare(&mut self, len: usize) {
         self.len = len;
         self.pos = 0;
     }
 
+    /** Write internal buffer to dst */
     fn flush(&mut self, dst: &mut [u8], written: usize) -> usize {
         let write = cmp::min(dst.len() - written, self.len - self.pos);
 
@@ -267,6 +269,7 @@ impl Source {
         write
     }
 
+    /** return true when all data from source or internal buffer was flushed */
     fn is_empty(&self) -> bool {
         self.pos == self.len
     }
@@ -289,6 +292,8 @@ impl<'a> Serializer<'a> {
         }
     }
 
+    // Set Serializer to initial state. must be used bettween calling
+    // writeCall, writeValue, writeResponse
     pub fn reset(&mut self) {
         self.stack.clear();
         self.stack.push(States::Init);
@@ -451,6 +456,7 @@ impl<'a> Serializer<'a> {
         Ok(written)
     }
 
+    // create FRPC/S method call with method name.    
     pub fn write_call(&mut self, dst: &mut [u8], name: &str) -> Result<usize, &'static str> {
         let mut written: usize = 0;
 
@@ -497,6 +503,7 @@ impl<'a> Serializer<'a> {
         Ok(written)
     }
 
+    // create FRPC/S method call with method name.    
     pub fn write_value(&mut self, dst: &mut [u8], value: &'a Value) -> Result<usize, &'static str> {
         while let Some(state) = self.stack.last_mut() {
             match state {
@@ -505,7 +512,7 @@ impl<'a> Serializer<'a> {
                 _ => return Err("Invalid state"),
             }
         }
-        Ok(0)
+        return Err("serializer is not initialized");
     }
 
     pub fn write_response(&mut self, dst: &mut [u8], value: &'a Value) -> Result<usize, &'static str> {
@@ -529,7 +536,7 @@ impl<'a> Serializer<'a> {
                 _ => return Err("Invalid state"),
             }
         }
-        Ok(written)
+        return Err("serializer is not initialized");
     }
 
     pub fn write_fault(&mut self, dst: &mut [u8], code:i64, msg:&str) -> Result<usize, &'static str> {
@@ -538,6 +545,7 @@ impl<'a> Serializer<'a> {
         while let Some(state) = self.stack.last_mut() {
             match state {
                 States::Init => {
+                    // Write response header
                     let cnt = write_magic(FAULT_RESPOSE_ID, &mut self.source.buffer).unwrap();
                     self.source.prepare(cnt);
                     *state = States::FaultHead;
@@ -566,6 +574,7 @@ impl<'a> Serializer<'a> {
                     *state = States::FaultMsg;
                 }
                 States::FaultMsg => {
+                    // put fault mesage lenght 
                     written += self.source.flush(dst, written);
                     if !self.source.is_empty() {
                         return Ok(written);
@@ -678,5 +687,6 @@ mod tests {
         let cnt = serializer.write_value(&mut buffer[written..], &val);
         assert_eq!(cnt.is_ok(), true);
         written += cnt.unwrap();
+        println!("Serialized data len: {}", written);
     }
 }

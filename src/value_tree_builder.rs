@@ -1,10 +1,13 @@
-use crate::serialize::Value;
+use crate::serialize::{DateTimeVer30, Value};
 use crate::tokenizer::*;
 use std::collections::HashMap;
+use std::str;
 
 enum Type {
     Array(Vec<Value>),
-    Struct((String, HashMap<String, Value>)), // (key to add)
+    Struct((String, HashMap<String, Value>)), // (key for new item to add, map)
+    Str(String),
+    Binary(Vec<u8>),
 }
 
 pub struct ValueTreeBuilder {
@@ -13,7 +16,7 @@ pub struct ValueTreeBuilder {
     pub was_response: bool,
     pub method_name: String,
 
-    pub values: Vec<Value>,
+    pub value: Value, // result values
     stack: Vec<Type>,
 }
 
@@ -23,8 +26,8 @@ impl ValueTreeBuilder {
             major_version: 0,
             minor_version: 0,
             was_response: false,
-            method_name: String::from(""),
-            values: vec![],
+            method_name: String::new(),
+            value: Value::Array(vec![]),
             stack: vec![],
         }
     }
@@ -35,7 +38,10 @@ impl ValueTreeBuilder {
                 arr.push(v);
             }
             Type::Struct((key, strct)) => {
-                strct.insert(std::mem::replace(key, String::from("")), v);
+                strct.insert(std::mem::replace(key, String::new()), v);
+            }
+            _ => {
+                unreachable!();
             }
         }
     }
@@ -53,7 +59,7 @@ impl Callback for ValueTreeBuilder {
     }
 
     /* Stop on false, continue on true */
-    fn call(&mut self, method: &str, avail: usize, lenght: usize) -> bool {
+    fn call(&mut self, method: &str, lenght: usize) -> bool {
         if self.method_name.capacity() < lenght {
             self.method_name.reserve(lenght);
         }
@@ -111,34 +117,26 @@ impl Callback for ValueTreeBuilder {
         return false;
     }
 
-    fn datetime(&mut self) -> bool {
-        true
+    fn datetime(&mut self, v: DateTimeVer30) -> bool {
+        if let Some(last) = self.stack.last_mut() {
+            ValueTreeBuilder::append_to_last(last, Value::DateTime(v));
+            return true;
+        }
+        return false;
     }
 
-    fn binary(&mut self, v: &[u8]) -> bool {
-        true
-    }
-
-    fn push_array(&mut self, len: usize) -> bool {
-        let mut v = vec![];
+    fn string_begin(&mut self, len: usize) -> bool {
+        let mut v = String::new();
         v.reserve(len);
-        self.stack.push(Type::Array(v));
+        self.stack.push(Type::Str(v));
         return true;
     }
 
-    fn push_struct(&mut self, len: usize) -> bool {
-        let mut h = HashMap::new();
-        h.reserve(len);
-        let empty_key = String::from("");
-        self.stack.push(Type::Struct((empty_key, h)));
-        return true;
-    }
-
-    fn map_key(&mut self, key: &mut String) -> bool {
+    fn string_data(&mut self, v: &[u8], _len: usize) -> bool {
         if let Some(last) = self.stack.last_mut() {
             match last {
-                Type::Struct((k, _)) => {
-                    std::mem::swap(key, k);
+                Type::Str(val) => {
+                    val.insert_str(val.len(), str::from_utf8(&v).unwrap());
                 }
                 _ => return false,
             }
@@ -147,11 +145,73 @@ impl Callback for ValueTreeBuilder {
         return false;
     }
 
-    fn pop_value(&mut self) -> bool {
-        if let Some(last) = self.stack.pop() {
+    fn binary_begin(&mut self, len: usize) -> bool {
+        let mut v: Vec<u8> = vec![];
+        v.reserve(len);
+        self.stack.push(Type::Binary(v));
+        return true;
+    }
+
+    fn binary_data(&mut self, v: &[u8], _len: usize) -> bool {
+        if let Some(last) = self.stack.last_mut() {
             match last {
-                Type::Struct((_, v)) => self.values.push(Value::Struct(v)),
-                Type::Array(v) => self.values.push(Value::Array(v)),
+                Type::Binary(val) => {
+                    // What was written earlier
+                    let written = val.len();
+                    val[written..written + v.len()].copy_from_slice(&v);
+                }
+                _ => return false,
+            }
+            return true;
+        }
+        return false;
+    }
+
+    fn array_begin(&mut self, len: usize) -> bool {
+        let mut v = vec![];
+        v.reserve(len);
+        self.stack.push(Type::Array(v));
+        return true;
+    }
+
+    fn struct_begin(&mut self, len: usize) -> bool {
+        let mut h = HashMap::new();
+        h.reserve(len);
+        let empty_key = String::new();
+        self.stack.push(Type::Struct((empty_key, h)));
+        return true;
+    }
+
+    fn struct_key(&mut self, v: &[u8], _len: usize) -> bool {
+        if let Some(last) = self.stack.last_mut() {
+            match last {
+                Type::Struct((key, _)) => {
+                    key.insert_str(key.len(), str::from_utf8(&v).unwrap());
+                }
+                _ => return false,
+            }
+            return true;
+        }
+        return false;
+    }
+
+    fn value_end(&mut self) -> bool {
+        if let Some(last) = self.stack.pop() {
+            // construct value
+            let v = match last {
+                Type::Struct((_, v)) => Value::Struct(v),
+                Type::Array(v) => Value::Array(v),
+                Type::Str(v) => Value::Str(v),
+                Type::Binary(v) => Value::Binary(v),
+            };
+
+            // append to top
+            if let Some(top) = self.stack.last_mut() {
+                ValueTreeBuilder::append_to_last(top, v);
+            } else {
+                // when stack is empty we reach result value
+                // it can be struct, array or single value
+                self.value = v;
             }
             return true;
         }
