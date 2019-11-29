@@ -10,22 +10,23 @@ enum States {
     CallNameSize,
     Response,
     Fault,
-    CallName((usize, usize)), // method name length, processed
+    CallName { length: usize, processed: usize },
     Value,
     Pop,
-    Integer1((bool, usize)), // is negative value, octect cnt for value
-    Integer3(usize),         // octect cnt for value
-    Double,                  // octect cnt for value
-    ArrayInit(usize),        // octect used for len
-    ArrayItems(usize),       // array len
-    StrLen(usize),           // octect used for lenght
-    StrData((usize, usize)), // string lenght, processed
-    BinLen(usize),           // octect used for lenght
-    BinData((usize, usize)), // string lenght, processed
-    StructHead(usize),       // octect used for lenght
-    StructItem(usize),       // struct items count
+    Integer1 { is_negative: bool, octects: usize },
+    Integer3 { octects: usize },
+    Double,
+    ArrayInit { octects: usize },
+    ArrayItems { len: usize },
+    StrLen { octects: usize },
+    StrData { length: usize, processed: usize },
+    BinLen { octects: usize },
+    BinData { length: usize, processed: usize },
+    StructHead { octects: usize },
+    StructItem { items: usize },
     StructKeyHead,
-    StructKey((usize, usize)),// key lenght, processed
+    StructKey { length: usize, processed: usize },
+    DateTime,
 }
 
 pub trait Callback {
@@ -54,7 +55,7 @@ pub trait Callback {
     fn integer(&mut self, v: i64) -> bool;
     fn boolean(&mut self, v: bool) -> bool;
     fn double_number(&mut self, v: f64) -> bool;
-    fn datetime(&mut self, v: DateTimeVer30) -> bool;
+    fn datetime(&mut self, v: &DateTimeVer30) -> bool;
     /** Called when we reached begin of string with len */
     fn string_begin(&mut self, len: usize) -> bool;
     /* send data chunk 'v' with size smaller or equal of total lenght in 'len'*/
@@ -67,7 +68,7 @@ pub trait Callback {
 
     fn array_begin(&mut self, len: usize) -> bool;
     fn struct_begin(&mut self, len: usize) -> bool; // pushMap
-    fn struct_key(&mut self,  v: &[u8], len: usize) -> bool;
+    fn struct_key(&mut self, v: &[u8], len: usize) -> bool;
 
     /** Called when reached end of string, binary, array or struct */
     fn value_end(&mut self) -> bool;
@@ -113,14 +114,14 @@ impl<'a> SourcePtr<'a> {
 
 struct Buffer {
     cnt: usize,
-    data: [u8; 11],
+    data: [u8; 17], // 17 is size of DateTimeFormat3 which is maximal type
 }
 
 impl Buffer {
     fn new() -> Buffer {
         Buffer {
             cnt: 0,
-            data: [0; 11],
+            data: [0; 17],
         }
     }
 
@@ -189,6 +190,13 @@ impl Tokenizer {
                     self.version_major = self.buffer.data[2];
                     self.version_minor = self.buffer.data[3];
 
+                    // We support version 3.0 or less (2.1, 2.0, 1.0)
+                    if self.version_major > 3
+                        || ((self.version_major == 3) && (self.version_minor > 0))
+                    {
+                        return Err("Unsuported version of FRPC/S protocol");
+                    }
+
                     if !cb.version(self.version_major, self.version_minor) {
                         return Err("Invalid version");
                     }
@@ -231,25 +239,27 @@ impl Tokenizer {
                         return Err("Invalid lenght of method name");
                     }
 
-                    *state = States::CallName((length, 0));
+                    *state = States::CallName {
+                        length: length,
+                        processed: 0,
+                    };
                     self.buffer.reset();
                 }
 
-                States::CallName((lenght, procesed)) => {
+                States::CallName { length, processed } => {
                     // read method name
-                    let avail = cmp::min(*lenght - *procesed, src.available());
+                    let avail = cmp::min(*length - *processed, src.available());
                     if avail == 0 {
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed());
                     }
 
-                    let run = cb.call(str::from_utf8(src.data(avail)).unwrap(), *lenght);
+                    let run = cb.call(str::from_utf8(src.data(avail)).unwrap(), *length);
 
-                    let procesed = *procesed + avail;
+                    *processed += avail;
                     src.advance(avail);
 
-                    if !run || *lenght != procesed {
-                        *state = States::CallName((*lenght, procesed));
+                    if !run || *length != *processed {
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed());
                     }
@@ -270,33 +280,36 @@ impl Tokenizer {
                             // get used octects
                             let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
 
-                            if self.version_major == 3 {
-                                *state = States::Integer3(octects);
+                            if self.version_major >= 3 {
+                                *state = States::Integer3 { octects };
                             } else {
                                 // negative number
-                                let negative = (self.buffer.data[0] & VINT_ID) != 0;
-                                *state = States::Integer1((negative, octects));
+                                let is_negative = (self.buffer.data[0] & VINT_ID) != 0;
+                                *state = States::Integer1 {
+                                    is_negative,
+                                    octects,
+                                };
                             }
                         }
                         STRING_ID => {
                             // get used octects
                             let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
-                            *state = States::StrLen(octects);
+                            *state = States::StrLen { octects };
                         }
                         BIN_ID => {
                             // get used octects
                             let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
-                            *state = States::BinLen(octects);
+                            *state = States::BinLen { octects };
                         }
                         STRUCT_ID => {
                             // get used octects
                             let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
-                            *state = States::StructHead(octects);
+                            *state = States::StructHead { octects };
                         }
                         ARRAY_ID => {
                             // get array len used octects
                             let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
-                            *state = States::ArrayInit(octects);
+                            *state = States::ArrayInit { octects };
                         }
                         NULL_ID => {
                             let run = cb.null();
@@ -316,14 +329,16 @@ impl Tokenizer {
                         DOUBLE_ID => {
                             *state = States::Double;
                         }
-                        DATETIME_ID => {}
+                        DATETIME_ID => {
+                            *state = States::DateTime;
+                        }
                         _ => return Err("Invalid type id"),
                     }
 
                     self.buffer.reset();
                 }
 
-                States::Integer3(octects) => {
+                States::Integer3 { octects } => {
                     let bytes_cnt = *octects + 1;
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
@@ -337,7 +352,10 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
 
-                States::Integer1((negative, octects)) => {
+                States::Integer1 {
+                    is_negative,
+                    octects,
+                } => {
                     let bytes_cnt = *octects + 1;
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
@@ -345,7 +363,7 @@ impl Tokenizer {
                     }
 
                     let mut v = read_i64(&self.buffer.data[0..bytes_cnt]);
-                    if *negative {
+                    if *is_negative {
                         v *= -1;
                     }
 
@@ -356,7 +374,7 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
                 // String
-                States::StrLen(octects) => {
+                States::StrLen { octects } => {
                     let bytes_cnt = *octects + 1;
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
@@ -371,20 +389,23 @@ impl Tokenizer {
                         return Err("cb::string_begin in StrLen failed");
                     }
 
-                    *state = States::StrData((cnt, 0));
+                    *state = States::StrData {
+                        length: cnt,
+                        processed: 0,
+                    };
                     self.buffer.reset();
                 }
 
-                States::StrData((lenght, processed)) => {
-                    assert!(*processed < *lenght, "invalid state");
+                States::StrData { length, processed } => {
+                    assert!(*processed < *length, "invalid state");
                     // Do we have any string data?
                     if src.is_all_consumed() {
                         return Ok(src.consumed());
                     }
 
                     // Process available or missing part
-                    let cnt = cmp::min(src.available(), *lenght - *processed);
-                    let run = cb.string_data(src.data(cnt), *lenght);
+                    let cnt = cmp::min(src.available(), *length - *processed);
+                    let run = cb.string_data(src.data(cnt), *length);
                     if !run {
                         return Err("cb::string_data in StrData failed");
                     }
@@ -394,7 +415,7 @@ impl Tokenizer {
                     *processed += cnt;
 
                     // did we process all string data?
-                    if processed != lenght {
+                    if processed != length {
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed()); // no we need more data
                     }
@@ -408,7 +429,7 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
                 // Binary
-                States::BinLen(octects) => {
+                States::BinLen { octects } => {
                     let bytes_cnt = *octects + 1;
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
@@ -423,20 +444,23 @@ impl Tokenizer {
                         return Err("cb::binary_begin in BinLen failed");
                     }
 
-                    *state = States::BinData((cnt, 0));
+                    *state = States::BinData {
+                        length: cnt,
+                        processed: 0,
+                    };
                     self.buffer.reset();
                 }
 
-                States::BinData((lenght, processed)) => {
-                    assert!(*processed < *lenght, "invalid state");
+                States::BinData { length, processed } => {
+                    assert!(*processed < *length, "invalid state");
                     // Do we have any binary data?
                     if src.is_all_consumed() {
                         return Ok(src.consumed());
                     }
 
                     // Process available or missing part
-                    let cnt = cmp::min(src.available(), *lenght - *processed);
-                    let run = cb.binary_data(src.data(cnt), *lenght);
+                    let cnt = cmp::min(src.available(), *length - *processed);
+                    let run = cb.binary_data(src.data(cnt), *length);
                     if !run {
                         return Err("cb::binary_data in BinData failed");
                     }
@@ -446,7 +470,7 @@ impl Tokenizer {
                     *processed += cnt;
 
                     // did we process all binary data?
-                    if processed != lenght {
+                    if processed != length {
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed()); // no we need more data
                     }
@@ -460,7 +484,7 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
                 // Array
-                States::ArrayInit(octects) => {
+                States::ArrayInit { octects } => {
                     let bytes_cnt = *octects + 1;
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
@@ -474,13 +498,13 @@ impl Tokenizer {
                         return Err("cb::array_begin in ArrayInit failed");
                     }
 
-                    *state = States::ArrayItems(cnt);
+                    *state = States::ArrayItems { len: cnt };
                     self.buffer.reset();
                 }
 
-                States::ArrayItems(cnt) => {
-                    if *cnt > 0 {
-                        *cnt -= 1;
+                States::ArrayItems { len } => {
+                    if *len > 0 {
+                        *len -= 1;
                         self.stack.push(States::Value);
                     } else {
                         let run = cb.value_end();
@@ -491,7 +515,7 @@ impl Tokenizer {
                     }
                 }
                 // Struct
-                States::StructHead(octects) => {
+                States::StructHead { octects } => {
                     let bytes_cnt = *octects + 1;
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
@@ -506,13 +530,13 @@ impl Tokenizer {
                         return Err("cb::struct_begin in StructHead failed");
                     }
 
-                    *state = States::StructItem(cnt);
+                    *state = States::StructItem { items: cnt };
                     self.buffer.reset();
                 }
 
-                States::StructItem(cnt) => {
-                    if *cnt > 0 {
-                        *cnt -= 1;
+                States::StructItem { items } => {
+                    if *items > 0 {
+                        *items -= 1;
                         self.stack.push(States::Value);
                         self.stack.push(States::StructKeyHead);
                     } else {
@@ -522,7 +546,7 @@ impl Tokenizer {
                         }
                         *state = States::Pop;
                     }
-                }       
+                }
 
                 States::StructKeyHead => {
                     if !self.buffer.consume(1, &mut src) {
@@ -531,20 +555,23 @@ impl Tokenizer {
                     }
 
                     let len = self.buffer.data[0] as usize;
-                    *state = States::StructKey((len, 0));
+                    *state = States::StructKey {
+                        length: len,
+                        processed: 0,
+                    };
                     self.buffer.reset();
                 }
 
-                States::StructKey((lenght, processed)) => {
-                    assert!(*processed < *lenght, "invalid state");
+                States::StructKey { length, processed } => {
+                    assert!(*processed < *length, "invalid state");
                     // Do we have any binary data?
                     if src.is_all_consumed() {
                         return Ok(src.consumed());
                     }
 
                     // Process available or missing part
-                    let cnt = cmp::min(src.available(), *lenght - *processed);
-                    let run = cb.struct_key(src.data(cnt), *lenght);
+                    let cnt = cmp::min(src.available(), *length - *processed);
+                    let run = cb.struct_key(src.data(cnt), *length);
                     if !run {
                         return Err("cb::struct_key in StructKey failed");
                     }
@@ -554,7 +581,7 @@ impl Tokenizer {
                     *processed += cnt;
 
                     // did we process all binary data?
-                    if processed != lenght {
+                    if processed != length {
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed()); // no we need more data
                     }
@@ -572,7 +599,7 @@ impl Tokenizer {
                 }
 
                 States::Fault => {
-                    self.stack.push(States::Value); // Message 
+                    self.stack.push(States::Value); // Message
                     self.stack.push(States::Value); // status code
                 }
 
@@ -587,6 +614,101 @@ impl Tokenizer {
                     if !run {
                         return Err("cb::double_number failed");
                     }
+                    *state = States::Pop;
+                }
+
+                States::DateTime => {
+                    let bytes: usize = if self.version_major == 3 { 14 } else { 10 };
+
+                    if !self.buffer.consume(bytes, &mut src) {
+                        assert!(src.is_all_consumed());
+                        return Ok(src.consumed());
+                    }
+
+                    let val = if self.version_major == 3 {
+                        // struct DateTimeFormat3_t {
+                        //     uint8_t timeZone : 8;
+                        //     uint64_t unixTime : 64;
+                        //     uint8_t weekDay : 3;
+                        //     uint8_t sec : 6;
+                        //     uint8_t minute : 6;
+                        //     uint8_t hour : 5;
+                        //     uint8_t day : 5;
+                        //     uint8_t month : 4;
+                        //     uint16_t year : 11;
+                        // } __attribute__((packed));
+                        let time_zone = (self.buffer.data[0] as i16) * 15 * 60;
+                        let unix_time = LittleEndian::read_u64(&self.buffer.data[2..]);
+                        let week_day: u8 = self.buffer.data[10] & 0x07;
+                        let sec: u8 = ((self.buffer.data[10] & 0xf8) >> 3)
+                            | ((self.buffer.data[11] & 0x01) << 5);
+                        let min: u8 = (self.buffer.data[11] & 0x7e) >> 1;
+                        let hour: u8 = ((self.buffer.data[11] & 0x80) >> 7)
+                            | ((self.buffer.data[12] & 0x0f) << 1);
+                        let day: u8 = ((self.buffer.data[12] & 0xf0) >> 4)
+                            | ((self.buffer.data[13] & 0x01) << 4);
+                        let month: u8 = (self.buffer.data[13] & 0x1e) >> 1;
+                        let year = (((self.buffer.data[13] as u16) & 0xe0) >> 5)
+                            | ((self.buffer.data[14] as u16) << 3) + 1600;
+
+                        DateTimeVer30 {
+                            time_zone,
+                            unix_time,
+                            week_day,
+                            sec,
+                            min,
+                            hour,
+                            day,
+                            month,
+                            year,
+                        }
+                    } else {
+                        // Verion 2.1 or 1.0
+
+                        // struct DateTimeFormat1_t {
+                        //     uint8_t timeZone : 8;
+                        //     uint32_t unixTime : 32;
+                        //     uint8_t weekDay : 3;
+                        //     uint8_t sec : 6;
+                        //     uint8_t minute : 6;
+                        //     uint8_t hour : 5;
+                        //     uint8_t day : 5;
+                        //     uint8_t month : 4;
+                        //     uint16_t year : 11;
+                        // } __attribute__((packed));
+
+                        let time_zone = (self.buffer.data[0] as i16) * 15 * 60;
+                        let unix_time = LittleEndian::read_u32(&self.buffer.data[2..]) as u64;
+                        let week_day = self.buffer.data[6] & 0x07;
+                        let sec = ((self.buffer.data[6] & 0xf8) >> 3)
+                            | ((self.buffer.data[7] & 0x01) << 5);
+                        let min = (self.buffer.data[7] & 0x7e) >> 1;
+                        let hour = ((self.buffer.data[7] & 0x80) >> 7)
+                            | ((self.buffer.data[8] & 0x0f) << 1);
+                        let day = ((self.buffer.data[8] & 0xf0) >> 4)
+                            | ((self.buffer.data[9] & 0x01) << 4);
+                        let month = (self.buffer.data[9] & 0x1e) >> 1;
+                        let year = (((self.buffer.data[9] as u16) & 0xe0) >> 5)
+                            | ((self.buffer.data[10] as u16) << 3) + 1600;
+
+                        DateTimeVer30 {
+                            time_zone,
+                            unix_time,
+                            week_day,
+                            sec,
+                            min,
+                            hour,
+                            day,
+                            month,
+                            year,
+                        }
+                    };
+
+                    let run = cb.datetime(&val);
+                    if !run {
+                        return Err("cb::datetime in Datetime failed");
+                    }
+
                     *state = States::Pop;
                 }
             }

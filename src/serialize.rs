@@ -3,7 +3,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
-use std::{u64, i64};
+use std::{i64, u64, u16};
 
 use crate::constants::*;
 
@@ -53,7 +53,7 @@ fn get_octets(number: u64) -> usize {
  * 2 -> 4
  * ...
  */
-fn zigzag_encode(n:i64) -> u64 {
+fn zigzag_encode(n: i64) -> u64 {
     // the right shift has to be arithmetic
     // negative numbers become all binary 1s
     // positive numbers become all binary 0s
@@ -65,16 +65,17 @@ fn zigzag_encode(n:i64) -> u64 {
 }
 
 // FRPC version 3.0 format (unix_time is 64 bit)
+#[derive(Copy, Clone, Debug)]
 pub struct DateTimeVer30 {
-    unix_time: u64,
-    year: u16,
-    month: u8,
-    day: u8,
-    hour: u8,
-    min: u8,
-    sec: u8,
-    week_day: u8,
-    time_zone: i16, // as difference between UTC and localtime in seconds
+    pub time_zone: i16, // as difference between UTC and localtime in seconds
+    pub unix_time: u64,
+    pub week_day: u8,
+    pub sec: u8,
+    pub min: u8,
+    pub hour: u8,
+    pub day: u8,
+    pub month: u8,
+    pub year: u16,
 }
 
 /** Writes protocol header and message type
@@ -115,7 +116,6 @@ fn write_null(dst: &mut [u8]) -> Result<usize, &'static str> {
 fn write_int(val: i64, dst: &mut [u8]) -> Result<usize, &'static str> {
     let val = zigzag_encode(val);
     let octets = get_octets(val);
-    
     if dst.len() < (octets + 2) {
         return Err("not enought space");
     }
@@ -137,34 +137,48 @@ fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &'static str> {
 }
 
 /** Writes tag and datetime value */
-fn write_datetime(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'static str> {
-    if dst.len() < 11 {
+fn write_datetime_v30(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'static str> {
+    if dst.len() < 15 {
         return Err("not enought space");
     }
 
     dst[0] = DATETIME_ID;
+
+    // struct DateTimeFormat3_t {
+    //     uint8_t timeZone : 8;
+    //     uint64_t unixTime : 64;
+    //     uint8_t weekDay : 3;
+    //     uint8_t sec : 6;
+    //     uint8_t minute : 6;
+    //     uint8_t hour : 5;
+    //     uint8_t day : 5;
+    //     uint8_t month : 4;
+    //     uint16_t year : 11;
+    // } __attribute__((packed));
+
     dst[1] = (val.time_zone / 60i16 / 15i16).try_into().unwrap();
-    // For backward compatibility with fastrpc unixtime was 32 bit only
-    let unix_time = if val.unix_time & INT32_MASK > 0 {
-        u32::max_value()
-    } else {
-        val.unix_time.try_into().unwrap()
-    };
+    
+    LittleEndian::write_u64(&mut dst[2..], val.unix_time);
+    // serialize
+    let mut byte: u8 = (val.sec & 0x1f) << 3; 
+    byte |= val.week_day & 0x07;
+    dst[10] = byte;
+    let mut byte: u8 = (val.min & 0x3f) << 1;
+    byte |= (val.sec & 0x20) >> 5;
+    byte |= (val.hour & 0x01) << 7;
+    dst[11] = byte;
+    let mut byte: u8 = (val.hour & 0x1e) >> 1;
+    byte |= (val.day & 0x0f) << 4;
+    dst[12] = byte;
+    let mut byte: u8 = (val.day & 0x1f) >> 4;
+    byte |= (val.month & 0x0f) << 1;
+    let year: u16 = if val.year < 1600  {0 } else {val.year - 1600};
+    byte |= ((year & 0x07) << 5).to_le_bytes()[1];
+    dst[13] = byte;
+    let byte: u8 = ((year & 0x07f8) >> 3).to_le_bytes()[0];
+    dst[14] = byte;
 
-    LittleEndian::write_u32(&mut dst[2..], unix_time);
-
-    // 6
-    dst[6] = val.week_day;
-    dst[7] = val.sec;
-    dst[8] = val.min;
-    dst[9] = val.hour;
-    dst[10] = val.day;
-    dst[11] = val.month;
-
-    let year = if val.year <= 1600 { 0 } else { val.year - 1600 };
-
-    LittleEndian::write_u16(&mut dst[12..], year);
-    Ok(14)
+    Ok(15)
 }
 
 /** Writes tag and length for string, binary, array and struct types */
@@ -245,7 +259,7 @@ enum States<'a> {
 struct Source {
     len: usize,
     pos: usize,
-    buffer: [u8; 11],
+    buffer: [u8; 15],
 }
 
 impl Source {
@@ -287,8 +301,8 @@ impl<'a> Serializer<'a> {
             source: Source {
                 len: 0,
                 pos: 0,
-                buffer: [0; 11],
-            }
+                buffer: [0; 15],
+            },
         }
     }
 
@@ -334,11 +348,11 @@ impl<'a> Serializer<'a> {
                         *state = States::FlushBuffer;
                     }
                     Value::DateTime(x) => {
-                        let cnt = write_datetime(x, &mut self.source.buffer).unwrap();
+                        let cnt = write_datetime_v30(x, &mut self.source.buffer).unwrap();
                         self.source.prepare(cnt);
                         *state = States::FlushBuffer;
                     }
-                }
+                },
 
                 States::FlushBuffer => {
                     written += self.source.flush(dst, written);
@@ -408,7 +422,7 @@ impl<'a> Serializer<'a> {
                 States::ArrayItem(iter) => match iter.next() {
                     None => *state = States::StackPop,
                     Some(x) => self.stack.push(States::Value(&x)),
-                }
+                },
 
                 // Struct
                 States::StructInit(v) => {
@@ -450,13 +464,13 @@ impl<'a> Serializer<'a> {
                     }
                     *state = States::StackPop;
                 }
-                _ => return Err("Invalid state")
+                _ => return Err("Invalid state"),
             } // states match
         } // stack iteration
         Ok(written)
     }
 
-    // create FRPC/S method call with method name.    
+    // create FRPC/S method call with method name.
     pub fn write_call(&mut self, dst: &mut [u8], name: &str) -> Result<usize, &'static str> {
         let mut written: usize = 0;
 
@@ -503,7 +517,7 @@ impl<'a> Serializer<'a> {
         Ok(written)
     }
 
-    // create FRPC/S method call with method name.    
+    // create FRPC/S method call with method name.
     pub fn write_value(&mut self, dst: &mut [u8], value: &'a Value) -> Result<usize, &'static str> {
         while let Some(state) = self.stack.last_mut() {
             match state {
@@ -515,7 +529,11 @@ impl<'a> Serializer<'a> {
         return Err("serializer is not initialized");
     }
 
-    pub fn write_response(&mut self, dst: &mut [u8], value: &'a Value) -> Result<usize, &'static str> {
+    pub fn write_response(
+        &mut self,
+        dst: &mut [u8],
+        value: &'a Value,
+    ) -> Result<usize, &'static str> {
         let mut written: usize = 0;
 
         while let Some(state) = self.stack.last_mut() {
@@ -539,7 +557,12 @@ impl<'a> Serializer<'a> {
         return Err("serializer is not initialized");
     }
 
-    pub fn write_fault(&mut self, dst: &mut [u8], code:i64, msg:&str) -> Result<usize, &'static str> {
+    pub fn write_fault(
+        &mut self,
+        dst: &mut [u8],
+        code: i64,
+        msg: &str,
+    ) -> Result<usize, &'static str> {
         let mut written: usize = 0;
 
         while let Some(state) = self.stack.last_mut() {
@@ -574,7 +597,7 @@ impl<'a> Serializer<'a> {
                     *state = States::FaultMsg;
                 }
                 States::FaultMsg => {
-                    // put fault mesage lenght 
+                    // put fault mesage lenght
                     written += self.source.flush(dst, written);
                     if !self.source.is_empty() {
                         return Ok(written);

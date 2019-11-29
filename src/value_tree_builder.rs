@@ -117,9 +117,9 @@ impl Callback for ValueTreeBuilder {
         return false;
     }
 
-    fn datetime(&mut self, v: DateTimeVer30) -> bool {
+    fn datetime(&mut self, v: &DateTimeVer30) -> bool {
         if let Some(last) = self.stack.last_mut() {
-            ValueTreeBuilder::append_to_last(last, Value::DateTime(v));
+            ValueTreeBuilder::append_to_last(last, Value::DateTime(*v));
             return true;
         }
         return false;
