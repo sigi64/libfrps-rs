@@ -144,6 +144,11 @@ impl Callback for ValueTreeBuilder {
     }
 
     fn string_data(&mut self, v: &[u8], _len: usize) -> bool {
+        // empty string is valid too
+        if v.len() == 0 {
+            return true;
+        }
+
         if let Some(last) = self.stack.last_mut() {
             match last {
                 Type::Str(val) => {
@@ -164,12 +169,14 @@ impl Callback for ValueTreeBuilder {
     }
 
     fn binary_data(&mut self, v: &[u8], _len: usize) -> bool {
+        // empty binary is valid too
+        if v.len() == 0 {
+            return true;
+        }
         if let Some(last) = self.stack.last_mut() {
             match last {
                 Type::Binary(val) => {
-                    // What was written earlier
-                    let written = val.len();
-                    val[written..written + v.len()].copy_from_slice(&v);
+                    val.extend_from_slice(&v);
                 }
                 _ => return false,
             }

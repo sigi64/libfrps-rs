@@ -33,6 +33,8 @@ mod tests {
         assert_eq!(res.is_ok(), true);
         assert_eq!(tree.major_version, 2);
         assert_eq!(tree.minor_version, 1);
+    
+        dbg!(tree.values);
     }
 
     #[test]

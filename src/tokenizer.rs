@@ -2,8 +2,8 @@ use crate::constants::*;
 use crate::serialize::DateTimeVer30;
 use byteorder::{ByteOrder, LittleEndian};
 use std::cmp;
+use std::fmt::Debug;
 use std::str;
-use std::fmt::Debug; 
 
 enum States {
     Init,
@@ -172,7 +172,11 @@ impl Tokenizer {
         }
     }
 
-    pub fn parse<T: Callback + Debug>(&mut self, src: &[u8], cb: &mut T) -> Result<usize, &'static str> {
+    pub fn parse<T: Callback + Debug>(
+        &mut self,
+        src: &[u8],
+        cb: &mut T,
+    ) -> Result<usize, &'static str> {
         let mut src = SourcePtr::new(src);
 
         while let Some(state) = self.stack.last_mut() {
@@ -213,6 +217,11 @@ impl Tokenizer {
                 States::Pop => {
                     self.buffer.reset();
                     self.stack.pop();
+
+                    // If not all data was consumed try again
+                    if self.stack.is_empty() && !src.is_all_consumed() {
+                        self.stack.push(States::Value);
+                    }
                 }
 
                 States::MessageType => {
@@ -750,8 +759,10 @@ impl Tokenizer {
             }
         }
 
-        dbg!(src.pos, &src.src[src.pos..], cb);
-        assert!(src.is_all_consumed());
+        if !src.is_all_consumed() {
+            dbg!(src.pos, &src.src[src.pos..], cb);
+            assert!(src.is_all_consumed());
+        }
         return Ok(src.consumed());
     }
 }
