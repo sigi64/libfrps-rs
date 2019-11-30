@@ -3,6 +3,7 @@ use crate::tokenizer::*;
 use std::collections::HashMap;
 use std::str;
 
+#[derive(Debug)]
 enum Type {
     Array(Vec<Value>),
     Struct((String, HashMap<String, Value>)), // (key for new item to add, map)
@@ -10,13 +11,15 @@ enum Type {
     Binary(Vec<u8>),
 }
 
+#[derive(Debug)]
 pub struct ValueTreeBuilder {
     pub major_version: u8,
     pub minor_version: u8,
     pub was_response: bool,
+    pub was_fault: bool,
     pub method_name: String,
 
-    pub value: Value, // result values
+    pub values: Vec<Value>, // result values
     stack: Vec<Type>,
 }
 
@@ -26,8 +29,9 @@ impl ValueTreeBuilder {
             major_version: 0,
             minor_version: 0,
             was_response: false,
+            was_fault: false,
             method_name: String::new(),
-            value: Value::Array(vec![]),
+            values: vec![],
             stack: vec![],
         }
     }
@@ -70,12 +74,14 @@ impl Callback for ValueTreeBuilder {
 
     /* Stop on false, continue on true */
     fn response(&mut self) -> bool {
+        self.was_response = true;
         true
     }
 
     /* Stop on false, continue on true */
     fn fault(&mut self) -> bool {
-        true
+        self.was_fault = true;
+        return true;
     }
 
     /* Stop on false, continue on true */
@@ -89,7 +95,8 @@ impl Callback for ValueTreeBuilder {
             ValueTreeBuilder::append_to_last(last, Value::Null);
             return true;
         }
-        return false;
+        self.values.push(Value::Null);
+        return true;
     }
 
     fn integer(&mut self, v: i64) -> bool {
@@ -97,7 +104,8 @@ impl Callback for ValueTreeBuilder {
             ValueTreeBuilder::append_to_last(last, Value::Int(v));
             return true;
         }
-        return false;
+        self.values.push(Value::Int(v));
+        return true;
     }
 
     /* Stop on false, continue on true */
@@ -106,7 +114,8 @@ impl Callback for ValueTreeBuilder {
             ValueTreeBuilder::append_to_last(last, Value::Bool(v));
             return true;
         }
-        return false;
+        self.values.push(Value::Bool(v));
+        return true;
     }
 
     fn double_number(&mut self, v: f64) -> bool {
@@ -114,7 +123,8 @@ impl Callback for ValueTreeBuilder {
             ValueTreeBuilder::append_to_last(last, Value::Double(v));
             return true;
         }
-        return false;
+        self.values.push(Value::Double(v));
+        return true;
     }
 
     fn datetime(&mut self, v: &DateTimeVer30) -> bool {
@@ -122,7 +132,8 @@ impl Callback for ValueTreeBuilder {
             ValueTreeBuilder::append_to_last(last, Value::DateTime(*v));
             return true;
         }
-        return false;
+        self.values.push(Value::DateTime(*v));
+        return true;
     }
 
     fn string_begin(&mut self, len: usize) -> bool {
@@ -211,7 +222,7 @@ impl Callback for ValueTreeBuilder {
             } else {
                 // when stack is empty we reach result value
                 // it can be struct, array or single value
-                self.value = v;
+                self.values.push(v);
             }
             return true;
         }

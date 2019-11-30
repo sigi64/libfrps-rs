@@ -205,6 +205,7 @@ fn write_key_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
     Ok(1)
 }
 
+#[derive(Debug)]
 pub enum Value {
     Int(i64),
     Str(String),

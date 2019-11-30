@@ -14,11 +14,12 @@ pub use value_tree_builder::ValueTreeBuilder;
 mod tests {
     use super::*;
     use enum_extract::let_extract;
+    use hex::decode;
 
     #[test]
     fn tokenize() {
         // serialized frps data
-        let data = vec![0xca, 0x11, 0x03, 0x00];
+        let data = hex::decode(r#"ca110201680b746573742e6d6574686f644005112006737472696e67580538011050050b656d70747920617272617958000c656d70747920737472756374500013686e75736e6520646f75626c65206369736c6f18d9ded9e411d94cc0026964382a047479706520087175657374696f6e5800500050050b656d70747920617272617958000c656d70747920737472756374500013686e75736e6520646f75626c65206369736c6f18d9ded9e411d94cc0026964382a047479706520087175657374696f6e2800d8b53956784a44f63360301c6a61206e6120746f206d616d206a61207365206e657a74726174696d"#).unwrap();
 
         // result Value tree
         let mut tree = value_tree_builder::ValueTreeBuilder::new();
@@ -26,9 +27,12 @@ mod tests {
         // Tokenizer
         let mut tokenizer = tokenizer::Tokenizer::new();
         let res = tokenizer.parse(&data, &mut tree);
+        if let Err(e) = res {
+            println!("Tokenizer returned: {}", e);
+        }
         assert_eq!(res.is_ok(), true);
-        assert_eq!(tree.major_version, 3);
-        assert_eq!(tree.minor_version, 0);
+        assert_eq!(tree.major_version, 2);
+        assert_eq!(tree.minor_version, 1);
     }
 
     #[test]
@@ -69,7 +73,7 @@ mod tests {
         assert!(res.is_ok(), "tokenizer returned error");
         assert_eq!(call.method_name, "server.stat");
         // call.value == [1, [2, 3]]
-        let_extract!(Value::Array(v), call.value, unreachable!());
+        let_extract!(Value::Array(v), &call.values[0], unreachable!());
 
         assert_eq!(v.len(), 2, "there are not 2 elements in array");
 
