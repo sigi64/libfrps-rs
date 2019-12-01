@@ -33,7 +33,6 @@ mod tests {
         assert_eq!(res.is_ok(), true);
         assert_eq!(tree.major_version, 2);
         assert_eq!(tree.minor_version, 1);
-    
         dbg!(tree.values);
     }
 
@@ -91,5 +90,121 @@ mod tests {
                 "there are not 2 elements in the last element which is array also"
             );
         }
+    }
+    use std::env;
+    use std::fs::File;
+    use std::io::{self, prelude::*, BufReader};
+
+    fn test_file(name: &str) -> io::Result<()> {
+        let mut path = env::current_dir()?;
+        path.push(name);
+
+        println!("The current directory is {}", path.display());
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        let mut test_name = String::new();
+        let mut frps_data = String::new();
+        let mut result = String::new();
+        let mut binary_data = String::new();
+
+        let mut cnt = 0;
+        for line in reader.lines() {
+            let line = line?;
+
+            // skip comments
+            if line.starts_with("#") {
+                continue;
+            }
+
+            if line.starts_with('@') {
+                test_name = line;
+                continue;
+            }
+
+            if line.starts_with(' ') || (line.len() == 0) {
+                if !frps_data.is_empty() {
+                    // run
+                    run_test(&cnt, &test_name, &frps_data, &result, &binary_data);
+                }
+
+                // clean for next test
+                test_name.clear();
+                frps_data.clear();
+                binary_data.clear();
+                result.clear();
+                continue;
+            }
+
+            // this line is input data to process
+            if frps_data.is_empty() {
+                cnt += 1;
+                frps_data = line;
+                continue;
+            }
+            // this is result
+            if result.is_empty() {
+                result = line;
+                continue;
+            }
+
+            // this is binary data
+            binary_data = line;
+        }
+
+        Ok(())
+    }
+
+    fn run_test(
+        order: &i32,
+        test_name: &String,
+        frps_data: &String,
+        result: &String,
+        binary_data: &String,
+    ) {
+        let mut tokenizer = tokenizer::Tokenizer::new();
+        let mut call = value_tree_builder::ValueTreeBuilder::new();
+        let mut in_string = false;
+        println!("Running test: #{} - {} result:{}", order, test_name, result);
+
+        // separete data by `"`
+        for p in frps_data.split('"') {
+            let res = if in_string {
+                // string is encoded as is
+                tokenizer.parse(p.as_bytes(), &mut call)
+            } else {
+                // filter all whitespace characters from data
+                let no_whitespace: String = p.chars().filter(|&c| !c.is_whitespace()).collect();
+                // convert hex to bytes
+                let chunk_frps = hex::decode(no_whitespace).unwrap();
+                // try tokenize
+                tokenizer.parse(chunk_frps.as_slice(), &mut call)
+            };
+
+            match res {
+                Ok(_cnt) => {}
+                Err(msg) => {
+                    if !result.starts_with("error") {
+                        dbg!("error", msg);
+                        assert!(res.is_ok(), "result should not error");
+                    }
+                }
+            }
+            in_string = if in_string { false } else { true };
+        }
+
+        // check last error
+    }
+
+    #[test]
+    fn test_frpc() {
+        let res = test_file("tests/frpc.tests");
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_frps() {
+        let res = test_file("tests/frps.tests");
+        assert!(res.is_ok());
     }
 }
