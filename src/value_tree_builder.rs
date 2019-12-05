@@ -1,5 +1,6 @@
 use crate::serialize::{DateTimeVer30, Value};
 use crate::tokenizer::*;
+use crate::constants::*;
 use std::collections::HashMap;
 use std::str;
 
@@ -137,6 +138,9 @@ impl Callback for ValueTreeBuilder {
     }
 
     fn string_begin(&mut self, len: usize) -> bool {
+        if len > MAX_STR_LENGTH {
+            return false;
+        }
         let mut v = String::new();
         v.reserve(len);
         self.stack.push(Type::Str(v));
@@ -162,6 +166,9 @@ impl Callback for ValueTreeBuilder {
     }
 
     fn binary_begin(&mut self, len: usize) -> bool {
+        if len > MAX_BIN_LENGTH {
+            return false;
+        }
         let mut v: Vec<u8> = vec![];
         v.reserve(len);
         self.stack.push(Type::Binary(v));
@@ -186,6 +193,9 @@ impl Callback for ValueTreeBuilder {
     }
 
     fn array_begin(&mut self, len: usize) -> bool {
+        if len > MAX_ARRAY_LENGTH {
+            return false;
+        }
         let mut v = vec![];
         v.reserve(len);
         self.stack.push(Type::Array(v));
@@ -193,6 +203,9 @@ impl Callback for ValueTreeBuilder {
     }
 
     fn struct_begin(&mut self, len: usize) -> bool {
+        if len > MAX_STRUCT_LENGTH {
+            return false;
+        }
         let mut h = HashMap::new();
         h.reserve(len);
         let empty_key = String::new();

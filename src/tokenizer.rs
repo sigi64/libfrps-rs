@@ -114,6 +114,7 @@ impl<'a> SourcePtr<'a> {
     }
 }
 
+#[derive(Debug)]
 struct Buffer {
     cnt: usize,
     data: [u8; 17], // 17 is size of DateTimeFormat3 which is maximal type
@@ -135,7 +136,7 @@ impl Buffer {
     // Try to read `need` bytes from `src` and update src
     // return true when enough data was read, false otherwise
     fn consume(&mut self, need: usize, src: &mut SourcePtr) -> bool {
-        assert!(need > self.cnt);
+        assert!(need >= self.cnt);
         assert!(need <= self.data.len());
 
         let cnt = cmp::min(need - self.cnt, src.available());
@@ -179,6 +180,11 @@ impl Tokenizer {
     ) -> Result<usize, &'static str> {
         let mut src = SourcePtr::new(src);
 
+        // If not all data was consumed try to read Value again
+        if self.stack.is_empty() && !src.is_all_consumed() {
+            self.stack.push(States::Value);
+        }
+
         while let Some(state) = self.stack.last_mut() {
             match state {
                 States::Init => {
@@ -218,7 +224,7 @@ impl Tokenizer {
                     self.buffer.reset();
                     self.stack.pop();
 
-                    // If not all data was consumed try again
+                    // If not all data was consumed try to read Value again
                     if self.stack.is_empty() && !src.is_all_consumed() {
                         self.stack.push(States::Value);
                     }
@@ -353,7 +359,7 @@ impl Tokenizer {
                             *state = States::DateTime;
                         }
                         _ => {
-                            dbg!(src.pos, &src.src[src.pos..], cb);
+                            dbg!(src.pos, &src.src[src.pos..], &self.buffer, cb);
                             return Err("Invalid type id");
                         }
                     }
@@ -361,6 +367,7 @@ impl Tokenizer {
                     self.buffer.reset();
                 }
 
+                // Protocol version 3.0 zigzack
                 States::Integer3 { octects } => {
                     let bytes_cnt = *octects + 1;
                     if !self.buffer.consume(bytes_cnt, &mut src) {
@@ -380,7 +387,16 @@ impl Tokenizer {
                     is_negative,
                     octects,
                 } => {
-                    let bytes_cnt = *octects + 1;
+                    let bytes_cnt = if self.version_major != 1 {
+                        *octects + 1
+                    } else {
+                        if *octects > 4 {
+                            return Err("Integer1 len is greater than 4 bytes");
+                        }
+
+                        *octects
+                    };
+
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
                         return Ok(src.consumed());
@@ -400,7 +416,16 @@ impl Tokenizer {
                 }
                 // String
                 States::StrLen { octects } => {
-                    let bytes_cnt = *octects + 1;
+                    let bytes_cnt = if self.version_major != 1 {
+                        *octects + 1
+                    } else {
+                        if *octects > 4 {
+                            return Err("String len is greater than 4 bytes");
+                        }
+
+                        *octects
+                    };
+
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
@@ -423,7 +448,10 @@ impl Tokenizer {
                 }
 
                 States::StrData { length, processed } => {
-                    assert!(*processed < *length, "invalid state");
+                    // if *length == 0 {
+                    //     return Err("Invalid string length");
+                    // }
+                    assert!(*processed <= *length, "invalid state");
                     // Do we have any string data?
                     if src.is_all_consumed() {
                         return Ok(src.consumed());
@@ -458,7 +486,16 @@ impl Tokenizer {
                 }
                 // Binary
                 States::BinLen { octects } => {
-                    let bytes_cnt = *octects + 1;
+                    let bytes_cnt = if self.version_major != 1 {
+                        *octects + 1
+                    } else {
+                        if *octects > 4 {
+                            return Err("Binary len is greater than 4 bytes");
+                        }
+
+                        *octects
+                    };
+
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
@@ -481,7 +518,7 @@ impl Tokenizer {
                 }
 
                 States::BinData { length, processed } => {
-                    assert!(*processed < *length, "invalid state");
+                    assert!(*processed <= *length, "invalid state");
                     // Do we have any binary data?
                     if src.is_all_consumed() {
                         return Ok(src.consumed());
@@ -516,7 +553,16 @@ impl Tokenizer {
                 }
                 // Array
                 States::ArrayInit { octects } => {
-                    let bytes_cnt = *octects + 1;
+                    let bytes_cnt = if self.version_major != 1 {
+                        *octects + 1
+                    } else {
+                        if *octects > 4 {
+                            return Err("Array len is greater than 4 bytes");
+                        }
+
+                        *octects
+                    };
+
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
@@ -549,7 +595,16 @@ impl Tokenizer {
                 }
                 // Struct
                 States::StructHead { octects } => {
-                    let bytes_cnt = *octects + 1;
+                    let bytes_cnt = if self.version_major != 1 {
+                        *octects + 1
+                    } else {
+                        if *octects > 4 {
+                            return Err("Struct len is greater than 4 bytes");
+                        }
+
+                        *octects
+                    };
+
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
@@ -590,6 +645,9 @@ impl Tokenizer {
                     }
 
                     let len = self.buffer.data[0] as usize;
+                    if len == 0 {
+                        return Err("Struct key cant be zero lenght");
+                    }
                     *state = States::StructKey {
                         length: len,
                         processed: 0,
