@@ -1,6 +1,6 @@
-use crate::{DateTimeVer30, Value};
-use crate::tokenizer::*;
 use crate::constants::*;
+use crate::tokenizer::*;
+use crate::{DateTimeVer30, Value};
 use std::collections::HashMap;
 use std::str;
 
@@ -13,15 +13,27 @@ enum Type {
 }
 
 #[derive(Debug)]
+pub enum ParsedStatus {
+    Error(String),
+    Response,
+    Fault,
+    MethodCall(String),
+}
+
+#[derive(Debug)]
 pub struct ValueTreeBuilder {
     pub major_version: u8,
     pub minor_version: u8,
-    pub was_response: bool,
-    pub was_fault: bool,
-    pub method_name: String,
 
-    pub values: Vec<Value>, // result values
+    /// What was parsed from
+    pub what: ParsedStatus,
+
+    /// result value according type what was parsed
+    pub values: Vec<Value>,
     stack: Vec<Type>,
+
+    // Frps streamed data
+    pub data: Vec<u8>
 }
 
 impl ValueTreeBuilder {
@@ -29,11 +41,10 @@ impl ValueTreeBuilder {
         ValueTreeBuilder {
             major_version: 0,
             minor_version: 0,
-            was_response: false,
-            was_fault: false,
-            method_name: String::new(),
+            what: ParsedStatus::Error(String::from("invalid data")),
             values: vec![],
             stack: vec![],
+            data: vec![]
         }
     }
 
@@ -54,7 +65,9 @@ impl ValueTreeBuilder {
 
 impl Callback for ValueTreeBuilder {
     /** Parsing always stop after this callback return. */
-    fn error(&mut self) {}
+    fn error(&mut self, msg: &str) {
+        self.what = ParsedStatus::Error(msg.to_owned())
+    }
 
     /* Stop on false, continue on true */
     fn version(&mut self, major_version: u8, minor_version: u8) -> bool {
@@ -65,28 +78,38 @@ impl Callback for ValueTreeBuilder {
 
     /* Stop on false, continue on true */
     fn call(&mut self, method: &str, lenght: usize) -> bool {
-        if self.method_name.capacity() < lenght {
-            self.method_name.reserve(lenght);
+        
+        // Method can be called multiple times 
+        match &mut self.what {
+            ParsedStatus::MethodCall(name) => {
+                if name.capacity() < lenght {
+                    name.reserve(lenght);
+                }
+                name.push_str(method);
+            }
+            _ => {
+                let name = method.to_owned();
+                self.what = ParsedStatus::MethodCall(name);
+            }
         }
-
-        self.method_name.push_str(method);
         return true;
     }
 
     /* Stop on false, continue on true */
     fn response(&mut self) -> bool {
-        self.was_response = true;
+        self.what = ParsedStatus::Response;
         true
     }
 
     /* Stop on false, continue on true */
     fn fault(&mut self) -> bool {
-        self.was_fault = true;
+        self.what = ParsedStatus::Fault;
         return true;
     }
 
     /* Stop on false, continue on true */
-    fn stream_data(&mut self) -> bool {
+    fn stream_data(&mut self, v:&[u8]) -> bool {
+        //self.data.push(v);
         true
     }
 

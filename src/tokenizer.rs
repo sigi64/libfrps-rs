@@ -34,7 +34,7 @@ enum States {
 /// Tokenizer calls methods in this trait when Token is found in input data
 pub trait Callback {
     /** Parsing always stop after this callback return. */
-    fn error(&mut self);
+    fn error(&mut self, msg: &str);
 
     /* Stop on false, continue on true */
     fn version(&mut self, major_version: u8, minor_version: u8) -> bool;
@@ -49,7 +49,7 @@ pub trait Callback {
     fn fault(&mut self) -> bool;
 
     /* Stop on false, continue on true */
-    fn stream_data(&mut self) -> bool;
+    fn stream_data(&mut self, v:&[u8]) -> bool;
 
     /* Stop on false, continue on true */
     fn null(&mut self) -> bool;
