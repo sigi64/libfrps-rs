@@ -5,6 +5,7 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::{i64, u64, u16};
 
+use crate::{DateTimeVer30, Value};
 use crate::constants::*;
 
 static ZERO: u64 = 0;
@@ -62,20 +63,6 @@ fn zigzag_encode(n: i64) -> u64 {
     let tmp = (n << 1) ^ (n >> 63);
 
     return u64::from_le_bytes(tmp.to_le_bytes());
-}
-
-// FRPC version 3.0 format (unix_time is 64 bit)
-#[derive(Copy, Clone, Debug)]
-pub struct DateTimeVer30 {
-    pub time_zone: i16, // as difference between UTC and localtime in seconds
-    pub unix_time: u64,
-    pub week_day: u8,
-    pub sec: u8,
-    pub min: u8,
-    pub hour: u8,
-    pub day: u8,
-    pub month: u8,
-    pub year: u16,
 }
 
 /** Writes protocol header and message type
@@ -203,19 +190,6 @@ fn write_key_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
     }
     dst[0] = size.try_into().unwrap();
     Ok(1)
-}
-
-#[derive(Debug)]
-pub enum Value {
-    Int(i64),
-    Str(String),
-    Null,
-    DateTime(DateTimeVer30),
-    Struct(HashMap<String, Value>),
-    Array(Vec<Value>),
-    Double(f64),
-    Bool(bool),
-    Binary(Vec<u8>),
 }
 
 enum States<'a> {

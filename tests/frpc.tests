@@ -368,7 +368,7 @@ CA11 0200 70 50 01 06 "binary" 30 00
 
 @binary v2 CA FE
 CA11 0200 70 50 01 06 "binary" 30 02 CAFE
-{binary: b"ca fe"}
+{binary: b"cafe"}
 
 @incomplete binary
 CA11 0200 70 50 01 06 "binary" 30 08 CAFE

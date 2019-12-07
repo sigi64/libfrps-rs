@@ -1,5 +1,5 @@
 use crate::constants::*;
-use crate::serialize::DateTimeVer30;
+use crate::DateTimeVer30;
 use byteorder::{ByteOrder, LittleEndian};
 use std::cmp;
 use std::fmt::Debug;
@@ -173,11 +173,16 @@ impl Tokenizer {
         }
     }
 
+    /// Function tokenize `src` and call `cb` for storing Tokens.
+    ///
+    /// Return Ok (`true` if more data are expected and how many `bytes` was processed) or error description
+    ///  
+    ///
     pub fn parse<T: Callback + Debug>(
         &mut self,
         src: &[u8],
         cb: &mut T,
-    ) -> Result<usize, &'static str> {
+    ) -> Result<(bool, usize), &'static str> {
         let mut src = SourcePtr::new(src);
 
         // If not all data was consumed try to read Value again
@@ -191,28 +196,30 @@ impl Tokenizer {
                     // first 4 bytes is header with magic and version
                     if !self.buffer.consume(4, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     // check FRPC magic and version
                     if self.buffer.data[0] != 0xca || self.buffer.data[1] != 0x11 {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
+                        // dbg!(src.pos, &src.src[src.pos..], cb);
                         return Err("Invalid magic expected 0xCA11");
                     }
 
                     self.version_major = self.buffer.data[2];
                     self.version_minor = self.buffer.data[3];
 
-                    // We support version 3.0 or less (2.1, 2.0, 1.0)
-                    if self.version_major > 3
-                        || ((self.version_major == 3) && (self.version_minor > 0))
+                    // We support versions: 3.0, 2.1, 2.0, 1.0
+                    if !(((self.version_major == 3) && (self.version_minor == 0))
+                        || ((self.version_major == 2) && (self.version_minor == 1))
+                        || ((self.version_major == 2) && (self.version_minor == 0))
+                        || ((self.version_major == 1) && (self.version_minor == 0)))
                     {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
+                        // dbg!(src.pos, &src.src[src.pos..], cb);
                         return Err("Unsuported version of FRPC/S protocol");
                     }
 
                     if !cb.version(self.version_major, self.version_minor) {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
+                        // dbg!(src.pos, &src.src[src.pos..], cb);
                         return Err("Invalid version");
                     }
 
@@ -234,7 +241,7 @@ impl Tokenizer {
                     // first byte is message type
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
@@ -254,7 +261,7 @@ impl Tokenizer {
                     // first byte is method name lenght
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let length: usize = self.buffer.data[0] as usize;
@@ -275,7 +282,7 @@ impl Tokenizer {
                     let avail = cmp::min(*length - *processed, src.available());
                     if avail == 0 {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let run = cb.call(str::from_utf8(src.data(avail)).unwrap(), *length);
@@ -285,7 +292,7 @@ impl Tokenizer {
 
                     if !run || *length != *processed {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     *state = States::Value;
@@ -296,7 +303,7 @@ impl Tokenizer {
                     // first byte is value type
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
@@ -336,6 +343,15 @@ impl Tokenizer {
                             *state = States::ArrayInit { octects };
                         }
                         NULL_ID => {
+                            if self.version_major == 1 {
+                                return Err("null in not supperted in v1.0 protocol");
+                            }
+
+                            // octects bits should be zero
+                            if (self.buffer.data[0] & OCTET_CNT_MASK) as usize != 0 {
+                                return Err("invalid null value");
+                            }
+
                             let run = cb.null();
                             if !run {
                                 dbg!(src.pos, &src.src[src.pos..], cb);
@@ -372,7 +388,7 @@ impl Tokenizer {
                     let bytes_cnt = *octects + 1;
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let run = cb.integer(zigzag_decode(&self.buffer.data[0..bytes_cnt]));
@@ -399,7 +415,7 @@ impl Tokenizer {
 
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let mut v = read_i64(&self.buffer.data[0..bytes_cnt]);
@@ -429,7 +445,7 @@ impl Tokenizer {
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
@@ -452,9 +468,9 @@ impl Tokenizer {
                     //     return Err("Invalid string length");
                     // }
                     assert!(*processed <= *length, "invalid state");
-                    // Do we have any string data?
-                    if src.is_all_consumed() {
-                        return Ok(src.consumed());
+                    // Do we have any string data? and string is not empty
+                    if (*processed != *length) && src.is_all_consumed() {
+                        return Ok((true, src.consumed()));
                     }
 
                     // Process available or missing part
@@ -472,7 +488,7 @@ impl Tokenizer {
                     // did we process all string data?
                     if processed != length {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed()); // no we need more data
+                        return Ok((true, src.consumed()));
                     }
 
                     // string is completed
@@ -499,7 +515,7 @@ impl Tokenizer {
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
@@ -519,9 +535,9 @@ impl Tokenizer {
 
                 States::BinData { length, processed } => {
                     assert!(*processed <= *length, "invalid state");
-                    // Do we have any binary data?
-                    if src.is_all_consumed() {
-                        return Ok(src.consumed());
+                    // Do we have any binary data and is not 0 lenght?
+                    if (*processed != *length) && src.is_all_consumed() {
+                        return Ok((true, src.consumed()));
                     }
 
                     // Process available or missing part
@@ -539,7 +555,7 @@ impl Tokenizer {
                     // did we process all binary data?
                     if processed != length {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed()); // no we need more data
+                        return Ok((true, src.consumed()));
                     }
 
                     // binary is completed
@@ -566,13 +582,13 @@ impl Tokenizer {
                     // read array len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
                     let run = cb.array_begin(cnt);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
+                        // dbg!(src.pos, &src.src[src.pos..], cb);
                         return Err("cb::array_begin in ArrayInit failed");
                     }
 
@@ -605,21 +621,21 @@ impl Tokenizer {
                         *octects
                     };
 
-                    // read array len
+                    // read struct len
                     if !self.buffer.consume(bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
-                    let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
+                    let items = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
 
-                    let run = cb.struct_begin(cnt);
+                    let run = cb.struct_begin(items);
                     if !run {
                         dbg!(src.pos, &src.src[src.pos..], cb);
                         return Err("cb::struct_begin in StructHead failed");
                     }
 
-                    *state = States::StructItem { items: cnt };
+                    *state = States::StructItem { items };
                     self.buffer.reset();
                 }
 
@@ -641,7 +657,7 @@ impl Tokenizer {
                 States::StructKeyHead => {
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let len = self.buffer.data[0] as usize;
@@ -659,7 +675,7 @@ impl Tokenizer {
                     assert!(*processed < *length, "invalid state");
                     // Do we have any binary data?
                     if src.is_all_consumed() {
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     // Process available or missing part
@@ -677,7 +693,7 @@ impl Tokenizer {
                     // did we process all binary data?
                     if processed != length {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed()); // no we need more data
+                        return Ok((true, src.consumed()));
                     }
 
                     *state = States::Pop;
@@ -707,7 +723,7 @@ impl Tokenizer {
                 States::Double => {
                     if !self.buffer.consume(8, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let v = LittleEndian::read_f64(&self.buffer.data[0..8]);
@@ -724,7 +740,7 @@ impl Tokenizer {
 
                     if !self.buffer.consume(bytes, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok(src.consumed());
+                        return Ok((true, src.consumed()));
                     }
 
                     let val = if self.version_major == 3 {
@@ -821,7 +837,7 @@ impl Tokenizer {
             dbg!(src.pos, &src.src[src.pos..], cb);
             assert!(src.is_all_consumed());
         }
-        return Ok(src.consumed());
+        return Ok((false, src.consumed()));
     }
 }
 

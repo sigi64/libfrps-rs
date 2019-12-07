@@ -3,12 +3,95 @@ mod serialize;
 mod tokenizer;
 mod value_tree_builder;
 
-pub use serialize::DateTimeVer30;
 pub use serialize::Serializer;
-pub use serialize::Value;
-
 pub use tokenizer::Tokenizer;
 pub use value_tree_builder::ValueTreeBuilder;
+
+extern crate chrono;
+use chrono::prelude::{DateTime, NaiveDateTime, Utc};
+use std::collections::HashMap;
+
+// FRPC version 3.0 format (unix_time is 64 bit)
+#[derive(Copy, Clone, Debug)]
+pub struct DateTimeVer30 {
+    pub time_zone: i16, // as difference between UTC and localtime in seconds
+    pub unix_time: u64,
+    pub week_day: u8,
+    pub sec: u8,
+    pub min: u8,
+    pub hour: u8,
+    pub day: u8,
+    pub month: u8,
+    pub year: u16,
+}
+
+#[derive(Debug)]
+pub enum Value {
+    Int(i64),
+    Str(String),
+    Null,
+    DateTime(DateTimeVer30),
+    Struct(HashMap<String, Value>),
+    Array(Vec<Value>),
+    Double(f64),
+    Bool(bool),
+    Binary(Vec<u8>),
+}
+
+impl Value {
+    // Return String format of value
+    pub fn to_string(&self) -> String {
+        return Value::_to_string(self);
+    }
+
+    // recursive implementation
+    fn _to_string(val: &Value) -> String {
+        match val {
+            Value::Int(v) => v.to_string(),
+            Value::Double(v) => v.to_string(),
+            Value::Null => "null".to_owned(),
+            Value::Bool(v) => {
+                if *v {
+                    "true".to_owned()
+                } else {
+                    "false".to_owned()
+                }
+            }
+            Value::DateTime(v) => {
+                let naive_datetime = NaiveDateTime::from_timestamp(v.unix_time as i64, 0);
+
+                DateTime::<Utc>::from_utc(naive_datetime, Utc)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+                // v.unix_time.to_string()
+            }
+            Value::Str(v) => "\"".to_owned() + v + &"\"".to_owned(),
+            Value::Binary(v) => "b\"".to_owned() + &hex::encode(v) + &"\"".to_owned(),
+            Value::Array(v) => {
+                "(".to_owned()
+                    + &v.iter().map(|x| Value::to_string(&x)).collect::<String>()
+                    + &")".to_owned()
+            }
+            Value::Struct(v) => {
+                let mut cnt: usize = 0;
+                let total = v.len();
+                return "{".to_owned()
+                    + &v.iter()
+                        .map(|(k, x)| {
+                            cnt += 1;
+
+                            if cnt < total {
+                                k.clone() + &": ".to_owned() + &Value::to_string(&x) + &", ".to_owned()
+                            } else {
+                                k.clone() + &": ".to_owned() + &Value::to_string(&x)
+                            }
+                        })
+                        .collect::<String>()
+                    + &"}".to_owned();
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -58,7 +141,6 @@ mod tests {
     //     assert_eq!(res.is_ok(), true);
     //     dbg!(buffer, tree.values);
     // }
-
 
     // #[test]
     // fn serialize_deserialize_call_with_nested_arrays_and_ints() {
@@ -148,8 +230,7 @@ mod tests {
             }
 
             if line.starts_with(' ') || (line.len() == 0) {
-                if !frps_data.is_empty() 
-                {
+                if !frps_data.is_empty() {
                     run_test(&cnt, &test_name, &frps_data, &result, &binary_data);
                 }
 
@@ -193,6 +274,7 @@ mod tests {
         println!("Running test: #{} - {} result:{}", order, test_name, result);
 
         // separete data by `"`
+        let mut failed = false;
         for p in frps_data.split('"') {
             let res = if in_string {
                 // string is encoded as is
@@ -209,18 +291,33 @@ mod tests {
             match res {
                 Ok(_cnt) => {}
                 Err(msg) => {
+                    failed = true;
                     if !result.starts_with("error") {
                         dbg!("error", msg);
                         assert!(res.is_ok(), "result should not error");
                     }
-                    break;
+                    return;
                 }
             }
             in_string = if in_string { false } else { true };
         }
-       
-        dbg!(call);      
+
+        if !failed {
+            let r = convert_result(&call);
+            println!("Test result:{}", r);
+            // dbg!(call);
+        }
         // check last error
+    }
+
+    fn convert_result(call: &ValueTreeBuilder) -> String {
+        let mut res = String::new();
+
+        for val in &call.values {
+            res += &val.to_string();
+        }
+
+        return res;
     }
 
     #[test]
@@ -229,10 +326,9 @@ mod tests {
         assert!(res.is_ok());
     }
 
-//     #[test]
-//     fn test_frps() {
-//         let res = test_file("tests/frps.tests");
-//         assert!(res.is_ok());
-//     }
+    //     #[test]
+    //     fn test_frps() {
+    //         let res = test_file("tests/frps.tests");
+    //         assert!(res.is_ok());
+    //     }
 }
-
