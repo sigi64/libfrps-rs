@@ -271,11 +271,13 @@ mod tests {
         let mut tokenizer = tokenizer::Tokenizer::new();
         let mut call = value_tree_builder::ValueTreeBuilder::new();
         let mut in_string = false;
-        println!("Running test: #{} - {} result:{}", order, test_name, result);
+        println!("\nRunning test: #{} - {} result:{}", order, test_name, result);
 
         // separete data by `"`
         let mut failed = false;
-        for p in frps_data.split('"') {
+        let mut error_msg = String::new();
+        let mut need_data = false;
+        'outer: for p in frps_data.split('"') {
             let res = if in_string {
                 // string is encoded as is
                 tokenizer.parse(p.as_bytes(), &mut call)
@@ -289,14 +291,23 @@ mod tests {
             };
 
             match res {
-                Ok(_cnt) => {}
+                Ok((expecting_data,_cnt)) => {
+                    if !expecting_data {
+                        need_data = false;
+                        break 'outer;
+                    } else {
+                        need_data = true;
+                    }
+                }
                 Err(msg) => {
                     failed = true;
                     if !result.starts_with("error") {
                         dbg!("error", msg);
                         assert!(res.is_ok(), "result should not error");
                     }
-                    return;
+
+                    error_msg = msg.to_owned();
+                    break 'outer;
                 }
             }
             in_string = if in_string { false } else { true };
@@ -304,8 +315,14 @@ mod tests {
 
         if !failed {
             let r = convert_result(&call);
-            println!("Test result:{}", r);
+            println!("Test OK result:{}", r);
             // dbg!(call);
+        } else {
+            if need_data {
+                println!("Test error: expected more data");
+            } else {
+                println!("Test error:{}", error_msg);
+            }
         }
         // check last error
     }

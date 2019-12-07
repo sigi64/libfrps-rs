@@ -28,8 +28,10 @@ enum States {
     StructKeyHead,
     StructKey { length: usize, processed: usize },
     DateTime,
+    Finish,
 }
 
+/// Tokenizer calls methods in this trait when Token is found in input data
 pub trait Callback {
     /** Parsing always stop after this callback return. */
     fn error(&mut self);
@@ -102,10 +104,9 @@ impl<'a> SourcePtr<'a> {
         self.pos += cnt;
     }
 
-    /// return number of bytes consumed. It is expected that all
-    /// dat was consumed, otherwise it is error
+    /// return number of bytes consumed. 
     fn consumed(&self) -> usize {
-        assert_eq!(self.pos, self.src.len());
+        //assert_eq!(self.pos, self.src.len());
         return self.src.len();
     }
 
@@ -176,8 +177,6 @@ impl Tokenizer {
     /// Function tokenize `src` and call `cb` for storing Tokens.
     ///
     /// Return Ok (`true` if more data are expected and how many `bytes` was processed) or error description
-    ///  
-    ///
     pub fn parse<T: Callback + Debug>(
         &mut self,
         src: &[u8],
@@ -266,7 +265,7 @@ impl Tokenizer {
 
                     let length: usize = self.buffer.data[0] as usize;
                     if length == 0 {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
                         return Err("Invalid lenght of method name");
                     }
 
@@ -375,7 +374,7 @@ impl Tokenizer {
                             *state = States::DateTime;
                         }
                         _ => {
-                            dbg!(src.pos, &src.src[src.pos..], &self.buffer, cb);
+                            // dbg!(src.pos, &src.src[src.pos..], &self.buffer, cb);
                             return Err("Invalid type id");
                         }
                     }
@@ -450,6 +449,10 @@ impl Tokenizer {
 
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
 
+                    if cnt > MAX_STR_LENGTH {
+                        return Err("string is too large")
+                    }
+
                     let run = cb.string_begin(cnt);
                     if !run {
                         dbg!(src.pos, &src.src[src.pos..], cb);
@@ -519,6 +522,10 @@ impl Tokenizer {
                     }
 
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
+
+                    if cnt > MAX_BIN_LENGTH {
+                        return Err("Binary too large")
+                    }
 
                     let run = cb.binary_begin(cnt);
                     if !run {
@@ -706,7 +713,8 @@ impl Tokenizer {
                         return Err("cb::response in Response failed");
                     }
 
-                    *state = States::Value;
+                    *state = States::Finish;
+                    self.stack.push(States::Value); // Value
                 }
 
                 States::Fault => {
@@ -716,6 +724,7 @@ impl Tokenizer {
                         return Err("cb::fault in Fault failed");
                     }
 
+                    *state = States::Finish;
                     self.stack.push(States::Value); // Message
                     self.stack.push(States::Value); // status code
                 }
@@ -756,18 +765,18 @@ impl Tokenizer {
                         //     uint16_t year : 11;
                         // } __attribute__((packed));
                         let time_zone = (self.buffer.data[0] as i16) * 15 * 60;
-                        let unix_time = LittleEndian::read_u64(&self.buffer.data[2..]);
-                        let week_day: u8 = self.buffer.data[10] & 0x07;
-                        let sec: u8 = ((self.buffer.data[10] & 0xf8) >> 3)
+                        let unix_time = LittleEndian::read_u64(&self.buffer.data[1..]);
+                        let week_day: u8 = self.buffer.data[9] & 0x07;
+                        let sec: u8 = ((self.buffer.data[9] & 0xf8) >> 3)
                             | ((self.buffer.data[11] & 0x01) << 5);
-                        let min: u8 = (self.buffer.data[11] & 0x7e) >> 1;
-                        let hour: u8 = ((self.buffer.data[11] & 0x80) >> 7)
+                        let min: u8 = (self.buffer.data[10] & 0x7e) >> 1;
+                        let hour: u8 = ((self.buffer.data[10] & 0x80) >> 7)
                             | ((self.buffer.data[12] & 0x0f) << 1);
-                        let day: u8 = ((self.buffer.data[12] & 0xf0) >> 4)
-                            | ((self.buffer.data[13] & 0x01) << 4);
-                        let month: u8 = (self.buffer.data[13] & 0x1e) >> 1;
-                        let year = (((self.buffer.data[13] as u16) & 0xe0) >> 5)
-                            | ((self.buffer.data[14] as u16) << 3) + 1600;
+                        let day: u8 = ((self.buffer.data[11] & 0xf0) >> 4)
+                            | ((self.buffer.data[12] & 0x01) << 4);
+                        let month: u8 = (self.buffer.data[12] & 0x1e) >> 1;
+                        let year = (((self.buffer.data[12] as u16) & 0xe0) >> 5)
+                            | ((self.buffer.data[13] as u16) << 3) + 1600;
 
                         DateTimeVer30 {
                             time_zone,
@@ -796,18 +805,18 @@ impl Tokenizer {
                         // } __attribute__((packed));
 
                         let time_zone = (self.buffer.data[0] as i16) * 15 * 60;
-                        let unix_time = LittleEndian::read_u32(&self.buffer.data[2..]) as u64;
-                        let week_day = self.buffer.data[6] & 0x07;
-                        let sec = ((self.buffer.data[6] & 0xf8) >> 3)
-                            | ((self.buffer.data[7] & 0x01) << 5);
-                        let min = (self.buffer.data[7] & 0x7e) >> 1;
-                        let hour = ((self.buffer.data[7] & 0x80) >> 7)
-                            | ((self.buffer.data[8] & 0x0f) << 1);
-                        let day = ((self.buffer.data[8] & 0xf0) >> 4)
+                        let unix_time = LittleEndian::read_u32(&self.buffer.data[1..]) as u64;
+                        let week_day = self.buffer.data[5] & 0x07;
+                        let sec = ((self.buffer.data[5] & 0xf8) >> 3)
+                            | ((self.buffer.data[6] & 0x01) << 5);
+                        let min = (self.buffer.data[6] & 0x7e) >> 1;
+                        let hour = ((self.buffer.data[6] & 0x80) >> 7)
+                            | ((self.buffer.data[7] & 0x0f) << 1);
+                        let day = ((self.buffer.data[7] & 0xf0) >> 4)
                             | ((self.buffer.data[9] & 0x01) << 4);
-                        let month = (self.buffer.data[9] & 0x1e) >> 1;
-                        let year = (((self.buffer.data[9] as u16) & 0xe0) >> 5)
-                            | ((self.buffer.data[10] as u16) << 3) + 1600;
+                        let month = (self.buffer.data[8] & 0x1e) >> 1;
+                        let year = (((self.buffer.data[8] as u16) & 0xe0) >> 5)
+                            | ((self.buffer.data[9] as u16) << 3) + 1600;
 
                         DateTimeVer30 {
                             time_zone,
@@ -830,6 +839,8 @@ impl Tokenizer {
 
                     *state = States::Pop;
                 }
+
+                States::Finish => return Ok((false, src.consumed()))
             }
         }
 
