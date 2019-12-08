@@ -2,7 +2,7 @@ use crate::constants::*;
 use crate::tokenizer::*;
 use crate::{DateTimeVer30, Value};
 use std::collections::HashMap;
-use std::str;
+use std::{fmt, str};
 
 #[derive(Debug)]
 enum Type {
@@ -14,6 +14,7 @@ enum Type {
 
 #[derive(Debug)]
 pub enum ParsedStatus {
+    Init,
     Error(String),
     Response,
     Fault,
@@ -33,7 +34,7 @@ pub struct ValueTreeBuilder {
     stack: Vec<Type>,
 
     // Frps streamed data
-    pub data: Vec<u8>
+    pub data: Vec<u8>,
 }
 
 impl ValueTreeBuilder {
@@ -41,10 +42,10 @@ impl ValueTreeBuilder {
         ValueTreeBuilder {
             major_version: 0,
             minor_version: 0,
-            what: ParsedStatus::Error(String::from("invalid data")),
+            what: ParsedStatus::Init,
             values: vec![],
             stack: vec![],
-            data: vec![]
+            data: vec![],
         }
     }
 
@@ -63,6 +64,41 @@ impl ValueTreeBuilder {
     }
 }
 
+impl fmt::Display for ValueTreeBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.what {
+            ParsedStatus::Init => {
+                write!(f, "{}", "initialized");
+            }
+            ParsedStatus::Error(msg) => {
+                write!(f, "error({})", msg);
+            }
+            ParsedStatus::Response => {
+                write!(f, "response(");
+                for v in &self.values {
+                    write!(f, "{}", v);
+                }
+                write!(f, ")");
+            }
+            ParsedStatus::MethodCall(name) => {
+                write!(f, "method {}(", name);
+                for v in &self.values {
+                    write!(f, "{}", v);
+                }
+                write!(f, ")");
+            }
+            ParsedStatus::Fault => {
+                write!(f, "fault(");
+                for v in &self.values {
+                    write!(f, "{}", v);
+                }
+                write!(f, ")");
+            }            
+        }
+        return Ok(());
+    }
+}
+
 impl Callback for ValueTreeBuilder {
     /** Parsing always stop after this callback return. */
     fn error(&mut self, msg: &str) {
@@ -78,8 +114,7 @@ impl Callback for ValueTreeBuilder {
 
     /* Stop on false, continue on true */
     fn call(&mut self, method: &str, lenght: usize) -> bool {
-        
-        // Method can be called multiple times 
+        // Method can be called multiple times
         match &mut self.what {
             ParsedStatus::MethodCall(name) => {
                 if name.capacity() < lenght {
@@ -108,7 +143,7 @@ impl Callback for ValueTreeBuilder {
     }
 
     /* Stop on false, continue on true */
-    fn stream_data(&mut self, v:&[u8]) -> bool {
+    fn stream_data(&mut self, v: &[u8]) -> bool {
         //self.data.push(v);
         true
     }

@@ -5,11 +5,12 @@ mod value_tree_builder;
 
 pub use serialize::Serializer;
 pub use tokenizer::Tokenizer;
-pub use value_tree_builder::ValueTreeBuilder;
+pub use value_tree_builder::{ParsedStatus, ValueTreeBuilder};
 
 extern crate chrono;
 use chrono::prelude::{DateTime, NaiveDateTime, Utc};
 use std::collections::HashMap;
+use std::fmt;
 
 // FRPC version 3.0 format (unix_time is 64 bit)
 #[derive(Copy, Clone, Debug)]
@@ -38,12 +39,13 @@ pub enum Value {
     Binary(Vec<u8>),
 }
 
-impl Value {
-    // Return String format of value
-    pub fn to_string(&self) -> String {
-        return Value::_to_string(self);
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", Value::_to_string(self))
     }
+}
 
+impl Value {
     // recursive implementation
     fn _to_string(val: &Value) -> String {
         match val {
@@ -81,7 +83,10 @@ impl Value {
                             cnt += 1;
 
                             if cnt < total {
-                                k.clone() + &": ".to_owned() + &Value::to_string(&x) + &", ".to_owned()
+                                k.clone()
+                                    + &": ".to_owned()
+                                    + &Value::to_string(&x)
+                                    + &", ".to_owned()
                             } else {
                                 k.clone() + &": ".to_owned() + &Value::to_string(&x)
                             }
@@ -271,60 +276,63 @@ mod tests {
         let mut tokenizer = tokenizer::Tokenizer::new();
         let mut call = value_tree_builder::ValueTreeBuilder::new();
         let mut in_string = false;
-        println!("\nRunning test: #{} - {} result:{}", order, test_name, result);
+        println!(
+            "\nRunning test: #{} - {} result:{}",
+            order, test_name, result
+        );
 
-        // separete data by `"`
-        let mut failed = false;
-        let mut error_msg = String::new();
+        let mut data_after_end = false;
         let mut need_data = false;
+        // separete data by `"`
         'outer: for p in frps_data.split('"') {
+            let mut chunk_size: usize = 0;
+            need_data = false;
             let res = if in_string {
                 // string is encoded as is
+                chunk_size = p.as_bytes().len();
                 tokenizer.parse(p.as_bytes(), &mut call)
             } else {
                 // filter all whitespace characters from data
                 let no_whitespace: String = p.chars().filter(|&c| !c.is_whitespace()).collect();
-                // convert hex to bytes
+                // convert hex characters to bytes
                 let chunk_frps = hex::decode(no_whitespace).unwrap();
                 // try tokenize
+                chunk_size = chunk_frps.len();
                 tokenizer.parse(chunk_frps.as_slice(), &mut call)
             };
 
             match res {
-                Ok((expecting_data,_cnt)) => {
+                Ok((expecting_data, processed)) => {
                     if !expecting_data {
                         need_data = false;
                         break 'outer;
                     } else {
                         need_data = true;
+                        data_after_end = processed < chunk_size; 
                     }
                 }
-                Err(msg) => {
-                    failed = true;
+                Err(_pos) => {
                     if !result.starts_with("error") {
-                        dbg!("error", msg);
                         assert!(res.is_ok(), "result should not error");
-                    }
-
-                    error_msg = msg.to_owned();
+                    };
                     break 'outer;
                 }
             }
             in_string = if in_string { false } else { true };
         }
 
-        if !failed {
-            let r = convert_result(&call);
-            println!("Test OK result:{}", r);
-            // dbg!(call);
-        } else {
-            if need_data {
-                println!("Test error: expected more data");
-            } else {
-                println!("Test error:{}", error_msg);
-            }
+        if need_data {
+            println!("result:error(unexpected data end)");
+            return;
         }
-        // check last error
+
+        if data_after_end {
+            println!("result:error(data after end)");
+            return;
+        }
+
+
+        println!("result:{}", call);
     }
 
     fn convert_result(call: &ValueTreeBuilder) -> String {

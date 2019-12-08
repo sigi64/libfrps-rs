@@ -49,7 +49,7 @@ pub trait Callback {
     fn fault(&mut self) -> bool;
 
     /* Stop on false, continue on true */
-    fn stream_data(&mut self, v:&[u8]) -> bool;
+    fn stream_data(&mut self, v: &[u8]) -> bool;
 
     /* Stop on false, continue on true */
     fn null(&mut self) -> bool;
@@ -104,7 +104,7 @@ impl<'a> SourcePtr<'a> {
         self.pos += cnt;
     }
 
-    /// return number of bytes consumed. 
+    /// return number of bytes consumed.
     fn consumed(&self) -> usize {
         //assert_eq!(self.pos, self.src.len());
         return self.src.len();
@@ -181,7 +181,7 @@ impl Tokenizer {
         &mut self,
         src: &[u8],
         cb: &mut T,
-    ) -> Result<(bool, usize), &'static str> {
+    ) -> Result<(bool, usize), usize> {
         let mut src = SourcePtr::new(src);
 
         // If not all data was consumed try to read Value again
@@ -201,7 +201,8 @@ impl Tokenizer {
                     // check FRPC magic and version
                     if self.buffer.data[0] != 0xca || self.buffer.data[1] != 0x11 {
                         // dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("Invalid magic expected 0xCA11");
+                        cb.error("Invalid magic expected 0xCA11");
+                        return Err(src.pos);
                     }
 
                     self.version_major = self.buffer.data[2];
@@ -214,12 +215,14 @@ impl Tokenizer {
                         || ((self.version_major == 1) && (self.version_minor == 0)))
                     {
                         // dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("Unsuported version of FRPC/S protocol");
+                        cb.error("bad protocol version");
+                        return Err(src.pos);
                     }
 
                     if !cb.version(self.version_major, self.version_minor) {
                         // dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("Invalid version");
+                        cb.error("cb::version invalid version");
+                        return Err(src.pos);
                     }
 
                     *state = States::MessageType;
@@ -248,8 +251,9 @@ impl Tokenizer {
                         RESPOSE_ID => *state = States::Response,
                         FAULT_RESPOSE_ID => *state = States::Fault,
                         _ => {
-                            dbg!(src.pos, &src.src[src.pos..], cb);
-                            return Err("Invalid message type");
+                            // dbg!(&src.pos, &src.src[src.pos..], &cb);
+                            cb.error("unknown type");
+                            return Err(src.pos);
                         }
                     }
 
@@ -266,7 +270,8 @@ impl Tokenizer {
                     let length: usize = self.buffer.data[0] as usize;
                     if length == 0 {
                         //dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("Invalid lenght of method name");
+                        cb.error("Invalid lenght of method name");
+                        return Err(src.pos);
                     }
 
                     *state = States::CallName {
@@ -343,18 +348,21 @@ impl Tokenizer {
                         }
                         NULL_ID => {
                             if self.version_major == 1 {
-                                return Err("null in not supperted in v1.0 protocol");
+                                cb.error("unknown type");
+                                return Err(src.pos);
                             }
 
                             // octects bits should be zero
                             if (self.buffer.data[0] & OCTET_CNT_MASK) as usize != 0 {
-                                return Err("invalid null value");
+                                cb.error("invalid value");
+                                return Err(src.pos);
                             }
 
                             let run = cb.null();
                             if !run {
-                                dbg!(src.pos, &src.src[src.pos..], cb);
-                                return Err("cb::null in Value failed");
+                                // dbg!(src.pos, &src.src[src.pos..], cb);
+                                cb.error("cb::null in Value failed");
+                                return Err(src.pos);
                             }
                             *state = States::Pop;
                         }
@@ -362,8 +370,9 @@ impl Tokenizer {
                             let v = (self.buffer.data[0] & OCTET_CNT_MASK) != 0;
                             let run = cb.boolean(v);
                             if !run {
-                                dbg!(src.pos, &src.src[src.pos..], cb);
-                                return Err("cb::boolean in Value failed");
+                                // dbg!(src.pos, &src.src[src.pos..], cb);
+                                cb.error("cb::boolean in Value failed");
+                                return Err(src.pos);
                             }
                             *state = States::Pop;
                         }
@@ -375,7 +384,8 @@ impl Tokenizer {
                         }
                         _ => {
                             // dbg!(src.pos, &src.src[src.pos..], &self.buffer, cb);
-                            return Err("Invalid type id");
+                            cb.error("unknown type");
+                            return Err(src.pos);
                         }
                     }
 
@@ -392,8 +402,9 @@ impl Tokenizer {
 
                     let run = cb.integer(zigzag_decode(&self.buffer.data[0..bytes_cnt]));
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::integer in Integer3 failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::integer in Integer3 failed");
+                        return Err(src.pos);
                     }
                     *state = States::Pop;
                 }
@@ -406,7 +417,8 @@ impl Tokenizer {
                         *octects + 1
                     } else {
                         if *octects > 4 {
-                            return Err("Integer1 len is greater than 4 bytes");
+                            cb.error("Integer1 len is greater than 4 bytes");
+                            return Err(src.pos);
                         }
 
                         *octects
@@ -424,8 +436,9 @@ impl Tokenizer {
 
                     let run = cb.integer(v);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::integer in Integer1 failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::integer in Integer1 failed");
+                        return Err(src.pos);
                     }
                     *state = States::Pop;
                 }
@@ -435,7 +448,8 @@ impl Tokenizer {
                         *octects + 1
                     } else {
                         if *octects > 4 {
-                            return Err("String len is greater than 4 bytes");
+                            cb.error("String len is greater than 4 bytes");
+                            return Err(src.pos);
                         }
 
                         *octects
@@ -450,13 +464,15 @@ impl Tokenizer {
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
 
                     if cnt > MAX_STR_LENGTH {
-                        return Err("string is too large")
+                        cb.error("string is too large");
+                        return Err(src.pos);
                     }
 
                     let run = cb.string_begin(cnt);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::string_begin in StrLen failed");
+                        // dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::string_begin in StrLen failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::StrData {
@@ -480,8 +496,9 @@ impl Tokenizer {
                     let cnt = cmp::min(src.available(), *length - *processed);
                     let run = cb.string_data(src.data(cnt), *length);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::string_data in StrData failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::string_data in StrData failed");
+                        return Err(src.pos);
                     }
 
                     // update processed data
@@ -497,8 +514,9 @@ impl Tokenizer {
                     // string is completed
                     let run = cb.value_end();
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::value_end in StrData failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::value_end in StrData failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::Pop;
@@ -509,7 +527,8 @@ impl Tokenizer {
                         *octects + 1
                     } else {
                         if *octects > 4 {
-                            return Err("Binary len is greater than 4 bytes");
+                            cb.error("Binary len is greater than 4 bytes");
+                            return Err(src.pos);
                         }
 
                         *octects
@@ -524,13 +543,15 @@ impl Tokenizer {
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
 
                     if cnt > MAX_BIN_LENGTH {
-                        return Err("Binary too large")
+                        cb.error("Binary too large");
+                        return Err(src.pos);
                     }
 
                     let run = cb.binary_begin(cnt);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::binary_begin in BinLen failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::binary_begin in BinLen failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::BinData {
@@ -551,8 +572,9 @@ impl Tokenizer {
                     let cnt = cmp::min(src.available(), *length - *processed);
                     let run = cb.binary_data(src.data(cnt), *length);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::binary_data in BinData failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::binary_data in BinData failed");
+                        return Err(src.pos);
                     }
 
                     // update processed data
@@ -568,8 +590,9 @@ impl Tokenizer {
                     // binary is completed
                     let run = cb.value_end();
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::value_end in BinData failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::value_end in BinData failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::Pop;
@@ -580,7 +603,8 @@ impl Tokenizer {
                         *octects + 1
                     } else {
                         if *octects > 4 {
-                            return Err("Array len is greater than 4 bytes");
+                            cb.error("Array len is greater than 4 bytes");
+                            return Err(src.pos);
                         }
 
                         *octects
@@ -596,7 +620,8 @@ impl Tokenizer {
                     let run = cb.array_begin(cnt);
                     if !run {
                         // dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::array_begin in ArrayInit failed");
+                        cb.error("cb::array_begin in ArrayInit failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::ArrayItems { len: cnt };
@@ -610,8 +635,9 @@ impl Tokenizer {
                     } else {
                         let run = cb.value_end();
                         if !run {
-                            dbg!(src.pos, &src.src[src.pos..], cb);
-                            return Err("cb::value_end in ArrayItem failed");
+                            // dbg!(src.pos, &src.src[src.pos..], cb);
+                            cb.error("cb::value_end in ArrayItem failed");
+                            return Err(src.pos);
                         }
                         *state = States::Pop;
                     }
@@ -622,7 +648,8 @@ impl Tokenizer {
                         *octects + 1
                     } else {
                         if *octects > 4 {
-                            return Err("Struct len is greater than 4 bytes");
+                            cb.error("Struct len is greater than 4 bytes");
+                            return Err(src.pos);
                         }
 
                         *octects
@@ -638,8 +665,9 @@ impl Tokenizer {
 
                     let run = cb.struct_begin(items);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::struct_begin in StructHead failed");
+                        // dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::struct_begin in StructHead failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::StructItem { items };
@@ -654,8 +682,9 @@ impl Tokenizer {
                     } else {
                         let run = cb.value_end();
                         if !run {
-                            dbg!(src.pos, &src.src[src.pos..], cb);
-                            return Err("cb::value_end in StructItem failed");
+                            // dbg!(src.pos, &src.src[src.pos..], cb);
+                            cb.error("cb::value_end in StructItem failed");
+                            return Err(src.pos);
                         }
                         *state = States::Pop;
                     }
@@ -669,7 +698,8 @@ impl Tokenizer {
 
                     let len = self.buffer.data[0] as usize;
                     if len == 0 {
-                        return Err("Struct key cant be zero lenght");
+                        cb.error("Struct key cant be zero lenght");
+                        return Err(src.pos);
                     }
                     *state = States::StructKey {
                         length: len,
@@ -689,8 +719,9 @@ impl Tokenizer {
                     let cnt = cmp::min(src.available(), *length - *processed);
                     let run = cb.struct_key(src.data(cnt), *length);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::struct_key in StructKey failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::struct_key in StructKey failed");
+                        return Err(src.pos);
                     }
 
                     // update processed data
@@ -709,8 +740,9 @@ impl Tokenizer {
                 States::Response => {
                     let run = cb.response();
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::response in Response failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::response in Response failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::Finish;
@@ -720,8 +752,9 @@ impl Tokenizer {
                 States::Fault => {
                     let run = cb.fault();
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::fault in Fault failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::fault in Fault failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::Finish;
@@ -738,8 +771,9 @@ impl Tokenizer {
                     let v = LittleEndian::read_f64(&self.buffer.data[0..8]);
                     let run = cb.double_number(v);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::double_number failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::double_number failed");
+                        return Err(src.pos);
                     }
                     *state = States::Pop;
                 }
@@ -833,14 +867,15 @@ impl Tokenizer {
 
                     let run = cb.datetime(&val);
                     if !run {
-                        dbg!(src.pos, &src.src[src.pos..], cb);
-                        return Err("cb::datetime in Datetime failed");
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::datetime in Datetime failed");
+                        return Err(src.pos);
                     }
 
                     *state = States::Pop;
                 }
 
-                States::Finish => return Ok((false, src.consumed()))
+                States::Finish => return Ok((false, src.consumed())),
             }
         }
 
