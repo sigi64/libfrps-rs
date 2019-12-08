@@ -270,7 +270,7 @@ impl Tokenizer {
                     let length: usize = self.buffer.data[0] as usize;
                     if length == 0 {
                         //dbg!(src.pos, &src.src[src.pos..], cb);
-                        cb.error("Invalid lenght of method name");
+                        cb.error("bad call name");
                         return Err(src.pos);
                     }
 
@@ -299,7 +299,8 @@ impl Tokenizer {
                         return Ok((true, src.consumed()));
                     }
 
-                    *state = States::Value;
+                    // since parameters are optional we suppose there is no parameters
+                    *state = States::Pop;
                     self.buffer.reset();
                 }
 
@@ -464,7 +465,7 @@ impl Tokenizer {
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
 
                     if cnt > MAX_STR_LENGTH {
-                        cb.error("string is too large");
+                        cb.error("too large string");
                         return Err(src.pos);
                     }
 
@@ -543,7 +544,7 @@ impl Tokenizer {
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
 
                     if cnt > MAX_BIN_LENGTH {
-                        cb.error("Binary too large");
+                        cb.error("too large binary data");
                         return Err(src.pos);
                     }
 
@@ -617,6 +618,12 @@ impl Tokenizer {
                     }
 
                     let cnt = read_i64(&self.buffer.data[0..bytes_cnt]) as usize;
+
+                    if cnt > MAX_ARRAY_LENGTH {
+                        cb.error("too large array");
+                        return Err(src.pos);
+                    }
+
                     let run = cb.array_begin(cnt);
                     if !run {
                         // dbg!(src.pos, &src.src[src.pos..], cb);
@@ -698,9 +705,14 @@ impl Tokenizer {
 
                     let len = self.buffer.data[0] as usize;
                     if len == 0 {
-                        cb.error("Struct key cant be zero lenght");
+                        cb.error("bad key length");
                         return Err(src.pos);
                     }
+
+                    if len > 255 {
+
+                    }
+
                     *state = States::StructKey {
                         length: len,
                         processed: 0,

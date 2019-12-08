@@ -70,8 +70,20 @@ impl Value {
             Value::Str(v) => "\"".to_owned() + v + &"\"".to_owned(),
             Value::Binary(v) => "b\"".to_owned() + &hex::encode(v) + &"\"".to_owned(),
             Value::Array(v) => {
+                let mut cnt: usize = 0;
+                let total = v.len();
+
                 "(".to_owned()
-                    + &v.iter().map(|x| Value::to_string(&x)).collect::<String>()
+                    + &v.iter()
+                        .map(|x| {
+                            cnt += 1;
+                            if cnt < total {
+                                Value::to_string(&x) + &", ".to_owned()
+                            } else {
+                                Value::to_string(&x)
+                            }
+                        })
+                        .collect::<String>()
                     + &")".to_owned()
             }
             Value::Struct(v) => {
@@ -276,10 +288,10 @@ mod tests {
         let mut tokenizer = tokenizer::Tokenizer::new();
         let mut call = value_tree_builder::ValueTreeBuilder::new();
         let mut in_string = false;
-        println!(
-            "\nRunning test: #{} - {} result:{}",
-            order, test_name, result
-        );
+        // println!(
+        //     "\nRunning test: #{} - {} result:{}",
+        //     order, test_name, result
+        // );
 
         let mut data_after_end = false;
         let mut need_data = false;
@@ -308,7 +320,7 @@ mod tests {
                         break 'outer;
                     } else {
                         need_data = true;
-                        data_after_end = processed < chunk_size; 
+                        data_after_end = processed < chunk_size;
                     }
                 }
                 Err(_pos) => {
@@ -321,18 +333,20 @@ mod tests {
             in_string = if in_string { false } else { true };
         }
 
-        if need_data {
-            println!("result:error(unexpected data end)");
-            return;
+        let res = if need_data {
+            String::from("error(unexpected data end)")
+        } else if data_after_end {
+            String::from("error(data after end)")
+        } else {
+            format!("{}", call)
+        };
+
+        if *result != res {
+            println!(
+                "Failed test #{} - {} => {} != {}",
+                order, test_name, result, res
+            );
         }
-
-        if data_after_end {
-            println!("result:error(data after end)");
-            return;
-        }
-
-
-        println!("result:{}", call);
     }
 
     fn convert_result(call: &ValueTreeBuilder) -> String {

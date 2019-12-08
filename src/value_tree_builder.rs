@@ -67,35 +67,17 @@ impl ValueTreeBuilder {
 impl fmt::Display for ValueTreeBuilder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.what {
-            ParsedStatus::Init => {
-                write!(f, "{}", "initialized");
-            }
-            ParsedStatus::Error(msg) => {
-                write!(f, "error({})", msg);
-            }
-            ParsedStatus::Response => {
-                write!(f, "response(");
-                for v in &self.values {
-                    write!(f, "{}", v);
-                }
-                write!(f, ")");
-            }
-            ParsedStatus::MethodCall(name) => {
-                write!(f, "method {}(", name);
-                for v in &self.values {
-                    write!(f, "{}", v);
-                }
-                write!(f, ")");
-            }
-            ParsedStatus::Fault => {
-                write!(f, "fault(");
-                for v in &self.values {
-                    write!(f, "{}", v);
-                }
-                write!(f, ")");
-            }            
+            ParsedStatus::Init => 
+                write!(f, "{}", "initialized"),
+            ParsedStatus::Error(msg) =>
+                write!(f, "error({})", msg),
+            ParsedStatus::Response =>
+                write!(f, "{}", &self.values.iter().map(|x| format!("{}", x)).collect::<String>()),
+            ParsedStatus::MethodCall(name) =>   
+                write!(f, "{}({})", name, &self.values.iter().map(|x| format!("{}", x)).collect::<String>()),
+            ParsedStatus::Fault => 
+                write!(f, "fault({}, {})", &self.values[0], &self.values[1]),
         }
-        return Ok(());
     }
 }
 

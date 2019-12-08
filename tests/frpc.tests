@@ -58,7 +58,7 @@ error(unexpected data end)
 @method response {status=200, statusMessage=Ok}
 #MGC  VER   RS STRUCT MEMBERS KL "status" INT(200) KL  "statusMessage" STR  "Ok"
 CA11  0200  70 50     02      06 "status" 38 c8    0d  "statusMessage" 2002 "Ok"
-{status: 200, statusMessage: "Ok"}
+{statusMessage: "Ok", status: 200}
 
 ################
 #### Calls  ####
@@ -104,7 +104,7 @@ error(unexpected data end)
 
 @struct containing empty struct and struct with values
 CA11 0200 70 50 02 02 "s1" 50 00 02 "s2" 50 01 01 "k" 20 01 "v"
-{s1: {}, s2: {k: "v"}}
+{s2: {k: "v"}, s1: {}}
 
 @struct in deep recursion
 CA11 0200 70 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 20 04 "DEEP"
@@ -112,7 +112,7 @@ CA11 0200 70 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50
 
 @struct more complex struct
 CA11 0200 70 50 04 04 "ahoj" 50 01 03 "cau" 20 04 "hele" 05 "intik" 39 f401 06 "string" 20 04 "fuj!" 03 "str" 50 03 04 "ahoj" 50 01 03 "cau" 20 04 "hele" 05 "intik" 39 f401 06 "string" 20 04 "fuj!"
-{ahoj: {cau: "hele"}, intik: 500, str: {ahoj: {cau: "hele"}, intik: 500, string: "fuj!"}, string: "fuj!"}
+{str: {ahoj: {cau: "hele"}, string: "fuj!", intik: 500}, intik: 500, string: "fuj!", ahoj: {cau: "hele"}}
 
 @extremely large struct
 CA11 0200 70 5F 1000004000000000
@@ -124,7 +124,7 @@ error(too large array)
 @valid fault
 #MGC VER  FAULT PINT(500)
 CA11 0200 78    39   f401     200a "FAULT_TEST"
-fault(500, FAULT_TEST)
+fault(500, "FAULT_TEST")
 
 @valid fault, v3 protocol int
 #MGC VER  FAULT INT(500)
@@ -145,7 +145,7 @@ error(unexpected data end)
 
 @fault, valid, different int type (v1)
 CA11 0100 78 0A f401 210a "FAULT_TEST"
-fault(500, FAULT_TEST)
+fault(500, "FAULT_TEST")
 
 @fault, invalid, duplicate string
 CA11 0200 78 39 f401 200b "FAULT_TEST1" 200b "FAULT_TEST2"
@@ -278,7 +278,7 @@ CA11 0200 70 50 01 06 "double" 18 00000000 0000f0ff
 
 @double NaN
 CA11 0200 70 50 01 06 "double" 18 ffffffff ffffff7f
-{double: nan}
+{double: NaN}
 
 # this is kind of fragile, it depends on double dump precision
 @double 1/3
@@ -407,15 +407,15 @@ error(invalid value)
 @v1 datetime
 # (20170127T12:39:19+0000)       DT ZN UNX       WDSEC  MIN<<1|HR<<7 HR>>1|day<<4  YR<5|D>4|M<1 YR>3
 CA11 0100 70 51 01 08 "datetime" 28 00 773F8B58  9D     4E           B6            23           34
-{datetime: 20170127T12:39:19+0000}
+{datetime: 2017-01-27 12:39:19}
 
 @v2 datetime
 CA11 0200 70 50 01 08 "datetime" 28 00 773F8B58  9D     4E           B6            23           34
-{datetime: 20170127T12:39:19+0000}
+{datetime: 2017-01-27 12:39:19}
 
 @v3 datetime
 CA11 0300 70 50 01 08 "datetime" 28 00 773F8B5800000000  9D     4E           B6            23           34
-{datetime: 20170127T12:39:19+0000}
+{datetime: 2017-01-27 12:39:19}
 
 ###############
 ### Result ####
