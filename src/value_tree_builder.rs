@@ -73,8 +73,16 @@ impl fmt::Display for ValueTreeBuilder {
                 write!(f, "error({})", msg),
             ParsedStatus::Response =>
                 write!(f, "{}", &self.values.iter().map(|x| format!("{}", x)).collect::<String>()),
-            ParsedStatus::MethodCall(name) =>   
-                write!(f, "{}({})", name, &self.values.iter().map(|x| format!("{}", x)).collect::<String>()),
+            ParsedStatus::MethodCall(name) => {
+                let len =self.values.len();
+                let mut cnt:usize = 0;
+
+                write!(f, "{}({})", name, &self.values.iter().map(|x| {
+                    cnt += 1;
+                    if cnt < len { format!("{}, ", x) } else { format!("{}", x)}
+                })
+                .collect::<String>())
+            }
             ParsedStatus::Fault => 
                 write!(f, "fault({}, {})", &self.values[0], &self.values[1]),
         }

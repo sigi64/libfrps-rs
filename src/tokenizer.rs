@@ -188,9 +188,9 @@ impl Tokenizer {
         let mut src = SourcePtr::new(src);
 
         // If not all data was consumed try to read Value again
-        if self.stack.is_empty() && !src.is_all_consumed() {
-            self.stack.push(States::Value);
-        }
+        // if self.method_arguments && self.stack.is_empty() && !src.is_all_consumed() {
+        //     self.stack.push(States::Value);
+        // }
 
         while let Some(state) = self.stack.last_mut() {
             match state {
@@ -236,8 +236,8 @@ impl Tokenizer {
                     self.buffer.reset();
                     self.stack.pop();
 
-                    // If not all data was consumed try to read Value again
-                    if self.stack.is_empty() && !src.is_all_consumed() {
+                    // If we started process method arguments try to read Value again  when stack is empty
+                    if self.method_arguments && self.stack.is_empty() {
                         self.stack.push(States::Value);
                     }
                 }
@@ -312,7 +312,8 @@ impl Tokenizer {
                     // first byte is value type
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
-                        return Ok((true, src.consumed()));
+                        // when we processing method arguments we dont need data
+                        return Ok((!self.method_arguments, src.consumed()));
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
@@ -320,9 +321,16 @@ impl Tokenizer {
                             // get used octects
                             let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
 
-                            if self.version_major >= 3 {
+                            if self.version_major == 3 {
                                 *state = States::Integer3 { octects };
                             } else {
+                                // if (self.version_major == 2)
+                                //     && ((self.buffer.data[0] & TYPE_MASK) == INT_ID)
+                                // {
+                                //     cb.error("unknown type");
+                                //     return Err(src.pos);
+                                // }
+
                                 // negative number
                                 let is_negative = (self.buffer.data[0] & VINT_ID) != 0;
                                 *state = States::Integer1 {
@@ -722,9 +730,7 @@ impl Tokenizer {
                         return Err(src.pos);
                     }
 
-                    if len > 255 {
-
-                    }
+                    if len > 255 {}
 
                     *state = States::StructKey {
                         length: len,
@@ -904,10 +910,10 @@ impl Tokenizer {
             }
         }
 
-        if !src.is_all_consumed() {
-            dbg!(src.pos, &src.src[src.pos..], cb);
-            assert!(src.is_all_consumed());
-        }
+        // if !src.is_all_consumed() {
+        //     dbg!(src.pos, &src.src[src.pos..], cb);
+        //     assert!(src.is_all_consumed());
+        // }
         return Ok((false, src.consumed()));
     }
 }

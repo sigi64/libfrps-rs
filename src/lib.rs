@@ -9,7 +9,7 @@ pub use value_tree_builder::{ParsedStatus, ValueTreeBuilder};
 
 extern crate chrono;
 use chrono::prelude::{DateTime, NaiveDateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 // FRPC version 3.0 format (unix_time is 64 bit)
@@ -89,18 +89,18 @@ impl Value {
             Value::Struct(v) => {
                 let mut cnt: usize = 0;
                 let total = v.len();
+
+                // We want sorted according keys so we use BTreeMap
+                let v: BTreeMap<_, _> = v.iter().collect();
                 return "{".to_owned()
                     + &v.iter()
                         .map(|(k, x)| {
                             cnt += 1;
 
                             if cnt < total {
-                                k.clone()
-                                    + &": ".to_owned()
-                                    + &Value::to_string(&x)
-                                    + &", ".to_owned()
+                                k.to_string() + ": " + &Value::to_string(&x) + ", "
                             } else {
-                                k.clone() + &": ".to_owned() + &Value::to_string(&x)
+                                k.to_string() + ": " + &Value::to_string(&x)
                             }
                         })
                         .collect::<String>()

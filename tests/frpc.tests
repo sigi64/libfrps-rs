@@ -58,7 +58,7 @@ error(unexpected data end)
 @method response {status=200, statusMessage=Ok}
 #MGC  VER   RS STRUCT MEMBERS KL "status" INT(200) KL  "statusMessage" STR  "Ok"
 CA11  0200  70 50     02      06 "status" 38 c8    0d  "statusMessage" 2002 "Ok"
-{statusMessage: "Ok", status: 200}
+{status: 200, statusMessage: "Ok"}
 
 ################
 #### Calls  ####
@@ -95,8 +95,8 @@ CA11 0200 70 50 01 00 09 c8
 error(bad key length)
 
 @struct max key length
-CA11 0200 70 50 01 FF "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 09 c8
-{aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 200}
+CA11 0300 70 50 01 FF "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 08 c8
+{aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 100}
 
 @premature struct end - 1 pair instead of 2
 CA11 0200 70 50 02 01 "a" 09c8
@@ -104,7 +104,7 @@ error(unexpected data end)
 
 @struct containing empty struct and struct with values
 CA11 0200 70 50 02 02 "s1" 50 00 02 "s2" 50 01 01 "k" 20 01 "v"
-{s2: {k: "v"}, s1: {}}
+{s1: {}, s2: {k: "v"}}
 
 @struct in deep recursion
 CA11 0200 70 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 20 04 "DEEP"
@@ -112,7 +112,7 @@ CA11 0200 70 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50 01 01 "a" 50
 
 @struct more complex struct
 CA11 0200 70 50 04 04 "ahoj" 50 01 03 "cau" 20 04 "hele" 05 "intik" 39 f401 06 "string" 20 04 "fuj!" 03 "str" 50 03 04 "ahoj" 50 01 03 "cau" 20 04 "hele" 05 "intik" 39 f401 06 "string" 20 04 "fuj!"
-{str: {ahoj: {cau: "hele"}, string: "fuj!", intik: 500}, intik: 500, string: "fuj!", ahoj: {cau: "hele"}}
+{ahoj: {cau: "hele"}, intik: 500, str: {ahoj: {cau: "hele"}, intik: 500, string: "fuj!"}, string: "fuj!"}
 
 @extremely large struct
 CA11 0200 70 5F 1000004000000000
@@ -133,7 +133,7 @@ fault(500, "FAULT_TEST")
 
 @fault without code
 CA11 0200 78    200a "FAULT_TEST"
-error(invalid fault)
+error(unexpected data end)
 
 @fault without text
 CA11 0200 78    39   f401
