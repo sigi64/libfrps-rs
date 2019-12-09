@@ -317,10 +317,15 @@ mod tests {
                 Ok((expecting_data, processed)) => {
                     if !expecting_data {
                         need_data = false;
-                        break 'outer;
+                        data_after_end = processed < chunk_size;
+                        match call.what {
+                            // Method arguments are optional, so Tokenizer returns
+                            // not expecting data. If we have data we try to get values
+                            ParsedStatus::MethodCall(_) => {}
+                            _ => break 'outer,
+                        }
                     } else {
                         need_data = true;
-                        data_after_end = processed < chunk_size;
                     }
                 }
                 Err(_pos) => {
@@ -347,16 +352,6 @@ mod tests {
                 order, test_name, result, res
             );
         }
-    }
-
-    fn convert_result(call: &ValueTreeBuilder) -> String {
-        let mut res = String::new();
-
-        for val in &call.values {
-            res += &val.to_string();
-        }
-
-        return res;
     }
 
     #[test]

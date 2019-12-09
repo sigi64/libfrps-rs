@@ -129,7 +129,7 @@ fault(500, "FAULT_TEST")
 @valid fault, v3 protocol int
 #MGC VER  FAULT INT(500)
 CA11 0300 78    09   e803     200a "FAULT_TEST"
-fault(500, FAULT_TEST)
+fault(500, "FAULT_TEST")
 
 @fault without code
 CA11 0200 78    200a "FAULT_TEST"

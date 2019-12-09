@@ -107,7 +107,7 @@ impl<'a> SourcePtr<'a> {
     /// return number of bytes consumed.
     fn consumed(&self) -> usize {
         //assert_eq!(self.pos, self.src.len());
-        return self.src.len();
+        return self.pos;
     }
 
     fn is_all_consumed(&self) -> bool {
@@ -161,6 +161,8 @@ pub struct Tokenizer {
 
     version_major: u8,
     version_minor: u8,
+    /// When `true` tokenizer is ready to accept methods arguments (which are optional)
+    method_arguments: bool,
 }
 
 impl Tokenizer {
@@ -171,6 +173,7 @@ impl Tokenizer {
 
             version_major: 0,
             version_minor: 0,
+            method_arguments: false,
         }
     }
 
@@ -300,6 +303,7 @@ impl Tokenizer {
                     }
 
                     // since parameters are optional we suppose there is no parameters
+                    self.method_arguments = true;
                     *state = States::Pop;
                     self.buffer.reset();
                 }
@@ -448,6 +452,10 @@ impl Tokenizer {
                     let bytes_cnt = if self.version_major != 1 {
                         *octects + 1
                     } else {
+                        if (self.version_major == 1) && (*octects == 0) {
+                            cb.error("bad size");
+                            return Err(src.pos);
+                        }
                         if *octects > 4 {
                             cb.error("String len is greater than 4 bytes");
                             return Err(src.pos);
@@ -527,6 +535,11 @@ impl Tokenizer {
                     let bytes_cnt = if self.version_major != 1 {
                         *octects + 1
                     } else {
+                        if (self.version_major == 1) && (*octects == 0) {
+                            cb.error("bad size");
+                            return Err(src.pos);
+                        }
+
                         if *octects > 4 {
                             cb.error("Binary len is greater than 4 bytes");
                             return Err(src.pos);
