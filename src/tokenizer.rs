@@ -5,6 +5,7 @@ use std::cmp;
 use std::fmt::Debug;
 use std::str;
 
+#[derive(Debug)]
 enum States {
     Init,
     MessageType,
@@ -14,8 +15,8 @@ enum States {
     CallName { length: usize, processed: usize },
     Value,
     Pop,
-    Integer1 { is_negative: bool, octects: usize },
-    Integer3 { octects: usize },
+    Integer1 { is_negative: bool, bytes_cnt: usize },
+    Integer3 { bytes_cnt: usize },
     Double,
     ArrayInit { octects: usize },
     ArrayItems { len: usize },
@@ -154,6 +155,14 @@ impl Buffer {
     }
 }
 
+enum Context {
+    Init,
+    Response,
+    Call { args: usize },
+    Fault { args: usize },
+    Data { len: usize },
+}
+
 pub struct Tokenizer {
     // Here we store state for recursive values as array and structs
     stack: Vec<States>,
@@ -162,7 +171,7 @@ pub struct Tokenizer {
     version_major: u8,
     version_minor: u8,
     /// When `true` tokenizer is ready to accept methods arguments (which are optional)
-    method_arguments: bool,
+    context: Context,
 }
 
 impl Tokenizer {
@@ -173,7 +182,15 @@ impl Tokenizer {
 
             version_major: 0,
             version_minor: 0,
-            method_arguments: false,
+            context: Context::Init,
+        }
+    }
+
+    fn arg_context(&self) -> bool {
+        match &self.context {
+            Context::Fault { args: arg } => *arg < (3 as usize),
+            Context::Call { args: _ } => false,
+            _ => true,
         }
     }
 
@@ -187,12 +204,8 @@ impl Tokenizer {
     ) -> Result<(bool, usize), usize> {
         let mut src = SourcePtr::new(src);
 
-        // If not all data was consumed try to read Value again
-        // if self.method_arguments && self.stack.is_empty() && !src.is_all_consumed() {
-        //     self.stack.push(States::Value);
-        // }
-
         while let Some(state) = self.stack.last_mut() {
+            // dbg!(&state);
             match state {
                 States::Init => {
                     // first 4 bytes is header with magic and version
@@ -236,9 +249,14 @@ impl Tokenizer {
                     self.buffer.reset();
                     self.stack.pop();
 
-                    // If we started process method arguments try to read Value again  when stack is empty
-                    if self.method_arguments && self.stack.is_empty() {
-                        self.stack.push(States::Value);
+                    // If we started process method arguments try to read Value
+                    //  again  when stack is empty
+                    // Fault put to 2 values to stack so we dont have to care
+                    if self.stack.is_empty() {
+                        match self.context {
+                            Context::Call { args: _ } => self.stack.push(States::Value),
+                            _ => {}
+                        }
                     }
                 }
 
@@ -250,9 +268,17 @@ impl Tokenizer {
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
-                        CALL_ID => *state = States::CallNameSize,
-                        RESPOSE_ID => *state = States::Response,
-                        FAULT_RESPOSE_ID => *state = States::Fault,
+                        CALL_ID => {
+                            *state = States::CallNameSize;
+                            self.context = Context::Call { args: 0 };
+                        }
+                        RESPOSE_ID => {
+                            *state = States::Response;
+                            self.context = Context::Response;
+                        }
+                        FAULT_RESPOSE_ID => {
+                            *state = States::Fault;
+                        }
                         _ => {
                             // dbg!(&src.pos, &src.src[src.pos..], &cb);
                             cb.error("unknown type");
@@ -303,7 +329,6 @@ impl Tokenizer {
                     }
 
                     // since parameters are optional we suppose there is no parameters
-                    self.method_arguments = true;
                     *state = States::Pop;
                     self.buffer.reset();
                 }
@@ -313,29 +338,41 @@ impl Tokenizer {
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
                         // when we processing method arguments we dont need data
-                        return Ok((!self.method_arguments, src.consumed()));
+                        return Ok((self.arg_context(), src.consumed()));
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
-                        VINT_ID | INT_ID | U_VINT_ID => {
+                        VINT_ID | U_VINT_ID => {
                             // get used octects
-                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+
+                            if self.version_major == 1 {
+                                cb.error("invalid type");
+                                return Err(src.pos);
+                            }
+                            octects += 1;
+                            // negative number
+                            let is_negative = (self.buffer.data[0] & VINT_ID) != 0;
+                            *state = States::Integer1 {
+                                is_negative,
+                                bytes_cnt: octects,
+                            };
+                        }
+                        INT_ID => {
+                            // get used octects
+                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
 
                             if self.version_major == 3 {
-                                *state = States::Integer3 { octects };
-                            } else {
-                                // if (self.version_major == 2)
-                                //     && ((self.buffer.data[0] & TYPE_MASK) == INT_ID)
-                                // {
-                                //     cb.error("unknown type");
-                                //     return Err(src.pos);
-                                // }
+                                octects += 1;
+                            }
 
+                            if self.version_major == 3 {
+                                *state = States::Integer3 { bytes_cnt: octects };
+                            } else {
                                 // negative number
-                                let is_negative = (self.buffer.data[0] & VINT_ID) != 0;
                                 *state = States::Integer1 {
-                                    is_negative,
-                                    octects,
+                                    is_negative: false,
+                                    bytes_cnt: octects,
                                 };
                             }
                         }
@@ -403,17 +440,55 @@ impl Tokenizer {
                     }
 
                     self.buffer.reset();
+
+                    // Check if we are processing arguments for call and
+                    // in case of fault check that values are of correct
+                    // type and number
+                    match &mut self.context {
+                        Context::Call { args: arg } => *arg += 1,
+                        Context::Fault { args: arg } => {
+                            // fault can have only 2 params:
+                            //  1st - Int
+                            //  2nd - String
+                            //  more or less arguments is error
+                            if *arg == 0 {
+                                match *state {
+                                    States::Integer1 {
+                                        is_negative: _,
+                                        bytes_cnt: _,
+                                    }
+                                    | States::Integer3 { bytes_cnt: _ } => {}
+                                    _ => {
+                                        cb.error("invalid fault");
+                                        return Err(src.pos);
+                                    }
+                                }
+                            } else if *arg == 1 {
+                                match *state {
+                                    States::StrLen { octects: _ } => {}
+                                    _ => {
+                                        cb.error("invalid fault");
+                                        return Err(src.pos);
+                                    }
+                                }
+                            } else if *arg == 2 {
+                                cb.error("invalid fault");
+                                return Err(src.pos);
+                            }
+                            *arg += 1;
+                        }
+                        _ => {}
+                    }
                 }
 
                 // Protocol version 3.0 zigzack
-                States::Integer3 { octects } => {
-                    let bytes_cnt = *octects + 1;
-                    if !self.buffer.consume(bytes_cnt, &mut src) {
+                States::Integer3 { bytes_cnt } => {
+                    if !self.buffer.consume(*bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
                         return Ok((true, src.consumed()));
                     }
 
-                    let run = cb.integer(zigzag_decode(&self.buffer.data[0..bytes_cnt]));
+                    let run = cb.integer(zigzag_decode(&self.buffer.data[0..*bytes_cnt]));
                     if !run {
                         //dbg!(src.pos, &src.src[src.pos..], cb);
                         cb.error("cb::integer in Integer3 failed");
@@ -424,25 +499,14 @@ impl Tokenizer {
 
                 States::Integer1 {
                     is_negative,
-                    octects,
+                    bytes_cnt,
                 } => {
-                    let bytes_cnt = if self.version_major != 1 {
-                        *octects + 1
-                    } else {
-                        if *octects > 4 {
-                            cb.error("Integer1 len is greater than 4 bytes");
-                            return Err(src.pos);
-                        }
-
-                        *octects
-                    };
-
-                    if !self.buffer.consume(bytes_cnt, &mut src) {
+                    if !self.buffer.consume(*bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
                         return Ok((true, src.consumed()));
                     }
 
-                    let mut v = read_i64(&self.buffer.data[0..bytes_cnt]);
+                    let mut v = read_i64(&self.buffer.data[0..*bytes_cnt]);
                     if *is_negative {
                         v *= -1;
                     }
@@ -789,6 +853,7 @@ impl Tokenizer {
                     }
 
                     *state = States::Finish;
+                    self.context = Context::Fault { args: 0 };
                     self.stack.push(States::Value); // Message
                     self.stack.push(States::Value); // status code
                 }
@@ -906,7 +971,17 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
 
-                States::Finish => return Ok((false, src.consumed())),
+                States::Finish => {
+                    // Detect calling tokenizer after it returned not needed data
+                    // and there are unexpected data in source stream
+                    if !src.is_all_consumed() {
+                        cb.error("data after end");
+                        return Err(src.pos);
+                    }
+
+                    // Don't pop stack, keep finish state to detect unexpected data
+                    return Ok((false, src.consumed()));
+                }
             }
         }
 

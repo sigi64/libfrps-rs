@@ -95,8 +95,8 @@ CA11 0200 70 50 01 00 09 c8
 error(bad key length)
 
 @struct max key length
-CA11 0300 70 50 01 FF "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 08 c8
-{aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 100}
+CA11 0200 70 50 01 FF "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 09 c8
+{aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 200}
 
 @premature struct end - 1 pair instead of 2
 CA11 0200 70 50 02 01 "a" 09c8
@@ -133,7 +133,7 @@ fault(500, "FAULT_TEST")
 
 @fault without code
 CA11 0200 78    200a "FAULT_TEST"
-error(unexpected data end)
+error(invalid fault)
 
 @fault without text
 CA11 0200 78    39   f401
@@ -149,7 +149,7 @@ fault(500, "FAULT_TEST")
 
 @fault, invalid, duplicate string
 CA11 0200 78 39 f401 200b "FAULT_TEST1" 200b "FAULT_TEST2"
-error(invalid fault)
+error(data after end)
 
 @fault, invalid, duplicate int
 CA11 0200 78 39 f401 38 01 200a "FAULT_TEST"
@@ -168,7 +168,7 @@ error(invalid fault)
 ##################
 @v3 integer in v2 stream
 CA11 0200 70 50 01 06 "badint" 09 e803
-error(unknown type)
+error(data after end)
 
 @v3 integer in v3 stream is okay
 CA11 0300 70 50 01 07 "goodint" 09 e803
@@ -283,7 +283,7 @@ CA11 0200 70 50 01 06 "double" 18 ffffffff ffffff7f
 # this is kind of fragile, it depends on double dump precision
 @double 1/3
 CA11 0200 70 50 01 06 "double" 18 55555555 5555d53f
-{double: 0.333333}
+{double: 0.3333333333333333}
 
 ################
 #### String ####

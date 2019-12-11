@@ -223,7 +223,7 @@ mod tests {
         let mut path = env::current_dir()?;
         path.push(name);
 
-        println!("The current directory is {}", path.display());
+        // println!("The current directory is {}", path.display());
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 
@@ -233,7 +233,9 @@ mod tests {
         let mut binary_data = String::new();
 
         let mut cnt = 0;
+        let mut line_cnt = 0;
         for line in reader.lines() {
+            line_cnt += 1;
             let line = line?;
 
             // skip comments
@@ -248,7 +250,7 @@ mod tests {
 
             if line.starts_with(' ') || (line.len() == 0) {
                 if !frps_data.is_empty() {
-                    run_test(&cnt, &test_name, &frps_data, &result, &binary_data);
+                    run_test(&cnt, &line_cnt, &test_name, &frps_data, &result, &binary_data);
                 }
 
                 // clean for next test
@@ -280,6 +282,7 @@ mod tests {
 
     fn run_test(
         order: &i32,
+        line: &i32,
         test_name: &String,
         frps_data: &String,
         result: &String,
@@ -294,11 +297,14 @@ mod tests {
         // );
 
         let mut data_after_end = false;
-        let mut need_data = false;
-        // separete data by `"`
+        let mut need_data = true;
+        let mut invalid_fault = false;
+        
+        // First separete data by `"` and then feed tokenizer with all data,
+        // regardless tokenizer returned that is not expecting_data. 
+        // This we will test that tokenizer detect 'data after end' cases.
         'outer: for p in frps_data.split('"') {
             let mut chunk_size: usize = 0;
-            need_data = false;
             let res = if in_string {
                 // string is encoded as is
                 chunk_size = p.as_bytes().len();
@@ -315,23 +321,30 @@ mod tests {
 
             match res {
                 Ok((expecting_data, processed)) => {
+                    need_data = expecting_data;
                     if !expecting_data {
-                        need_data = false;
                         data_after_end = processed < chunk_size;
-                        match call.what {
-                            // Method arguments are optional, so Tokenizer returns
-                            // not expecting data. If we have data we try to get values
-                            ParsedStatus::MethodCall(_) => {}
-                            _ => break 'outer,
-                        }
-                    } else {
-                        need_data = true;
+                        // match call.what {
+                        //     // Method arguments are optional, so Tokenizer returns
+                        //     // not expecting data. If we have data we try to get values
+                        //     ParsedStatus::MethodCall(_) => {}
+                        //     ParsedStatus::Fault => {
+                        //         // check fault that has 2 params int & string
+                        //         if call.values.len() != 2 {
+                        //             invalid_fault = true;
+                        //         }
+                        //     }
+                        //     _ => break 'outer,
+                        // }
                     }
                 }
                 Err(_pos) => {
                     if !result.starts_with("error") {
                         assert!(res.is_ok(), "result should not error");
                     };
+
+                    need_data = false;
+                    data_after_end = false;
                     break 'outer;
                 }
             }
@@ -342,14 +355,16 @@ mod tests {
             String::from("error(unexpected data end)")
         } else if data_after_end {
             String::from("error(data after end)")
-        } else {
+        } else if invalid_fault {
+            String::from("error(invalid fault)")
+        }else {
             format!("{}", call)
         };
 
         if *result != res {
             println!(
-                "Failed test #{} - {} => {} != {}",
-                order, test_name, result, res
+                "Failed test line:{} - #{} - {} => {} != {}",
+                line, order, test_name, result, res
             );
         }
     }
