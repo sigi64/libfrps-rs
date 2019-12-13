@@ -298,7 +298,6 @@ mod tests {
 
         let mut data_after_end = false;
         let mut need_data = true;
-        let mut invalid_fault = false;
         
         // First separete data by `"` and then feed tokenizer with all data,
         // regardless tokenizer returned that is not expecting_data. 
@@ -355,9 +354,7 @@ mod tests {
             String::from("error(unexpected data end)")
         } else if data_after_end {
             String::from("error(data after end)")
-        } else if invalid_fault {
-            String::from("error(invalid fault)")
-        }else {
+        } else {
             format!("{}", call)
         };
 

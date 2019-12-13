@@ -60,8 +60,9 @@ fn zigzag_encode(n: i64) -> u64 {
     // positive numbers become all binary 0s
     // effectively inverting bits of the result in
     // case of negative number
-    let tmp = (n << 1) ^ (n >> 63);
+    // let tmp = (n << 1) ^ (n >> 63);
 
+    let tmp = n.overflowing_shl(1).0 ^ n.overflowing_shr(63).0;
     return u64::from_le_bytes(tmp.to_le_bytes());
 }
 
