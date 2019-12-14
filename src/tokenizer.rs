@@ -14,12 +14,16 @@ enum States {
     Fault,
     CallName { length: usize, processed: usize },
     Value,
+    ValueInt,
+    ValueString,
     Pop,
+    IntegerHead,
     Integer1 { is_negative: bool, bytes_cnt: usize },
     Integer3 { bytes_cnt: usize },
     Double,
     ArrayInit { octects: usize },
     ArrayItems { len: usize },
+    StrHead,
     StrLen { octects: usize },
     StrData { length: usize, processed: usize },
     BinLen { octects: usize },
@@ -30,6 +34,10 @@ enum States {
     StructKey { length: usize, processed: usize },
     DateTime,
     Finish,
+    DataInit,
+    DataHead { octects: usize }, // begin of data state of frps part
+    DataLen { octects: usize },
+    Data { length: usize, processed: usize },
 }
 
 /// Tokenizer calls methods in this trait when Token is found in input data
@@ -41,7 +49,7 @@ pub trait Callback {
     fn version(&mut self, major_version: u8, minor_version: u8) -> bool;
 
     /* Stop on false, continue on true */
-    fn call(&mut self, method: &str, lenght: usize) -> bool;
+    fn call(&mut self, method: &str, length: usize) -> bool;
 
     /* Stop on false, continue on true */
     fn response(&mut self) -> bool;
@@ -62,12 +70,12 @@ pub trait Callback {
     fn datetime(&mut self, v: &DateTimeVer30) -> bool;
     /** Called when we reached begin of string with len */
     fn string_begin(&mut self, len: usize) -> bool;
-    /* send data chunk 'v' with size smaller or equal of total lenght in 'len'*/
+    /* send data chunk 'v' with size smaller or equal of total length in 'len'*/
     fn string_data(&mut self, v: &[u8], len: usize) -> bool;
 
     /** Called when we reached begin of binary data with len */
     fn binary_begin(&mut self, len: usize) -> bool;
-    /* send data chunk 'v' with size smaller or equal of total lenght in 'len'*/
+    /* send data chunk 'v' with size smaller or equal of total length in 'len'*/
     fn binary_data(&mut self, v: &[u8], len: usize) -> bool;
 
     fn array_begin(&mut self, len: usize) -> bool;
@@ -94,7 +102,7 @@ impl<'a> SourcePtr<'a> {
         return self.src.len() - self.pos;
     }
 
-    /// return slice for unconsumed part of data with `cnt` lenght
+    /// return slice for unconsumed part of data with `cnt` length
     fn data(&self, cnt: usize) -> &[u8] {
         assert!(self.pos + cnt <= self.src.len());
         return &self.src[self.pos..self.pos + cnt];
@@ -245,21 +253,6 @@ impl Tokenizer {
                     self.buffer.reset();
                 }
 
-                States::Pop => {
-                    self.buffer.reset();
-                    self.stack.pop();
-
-                    // If we started process method arguments try to read Value
-                    //  again  when stack is empty
-                    // Fault put to 2 values to stack so we dont have to care
-                    if self.stack.is_empty() {
-                        match self.context {
-                            Context::Call { args: _ } => self.stack.push(States::Value),
-                            _ => {}
-                        }
-                    }
-                }
-
                 States::MessageType => {
                     // first byte is message type
                     if !self.buffer.consume(1, &mut src) {
@@ -288,9 +281,8 @@ impl Tokenizer {
 
                     self.buffer.reset();
                 }
-
                 States::CallNameSize => {
-                    // first byte is method name lenght
+                    // first byte is method name length
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
                         return Ok((true, src.consumed()));
@@ -328,9 +320,35 @@ impl Tokenizer {
                         return Ok((true, src.consumed()));
                     }
 
-                    // since parameters are optional we suppose there is no parameters
+                    // since parameters and data are optional we suppose there is no parameters or data
                     *state = States::Pop;
                     self.buffer.reset();
+                }
+
+                States::Response => {
+                    let run = cb.response();
+                    if !run {
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::response in Response failed");
+                        return Err(src.pos);
+                    }
+
+                    *state = States::DataInit;
+                    self.stack.push(States::Value); // Value
+                }
+
+                States::Fault => {
+                    let run = cb.fault();
+                    if !run {
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::fault in Fault failed");
+                        return Err(src.pos);
+                    }
+
+                    *state = States::Finish;
+                    self.context = Context::Fault { args: 0 };
+                    self.stack.push(States::ValueString); // Message
+                    self.stack.push(States::ValueInt); // status code
                 }
 
                 States::Value => {
@@ -342,44 +360,13 @@ impl Tokenizer {
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
-                        VINT_ID | U_VINT_ID => {
-                            // get used octects
-                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
-
-                            if self.version_major == 1 {
-                                cb.error("invalid type");
-                                return Err(src.pos);
-                            }
-                            octects += 1;
-                            // negative number
-                            let is_negative = (self.buffer.data[0] & VINT_ID) != 0;
-                            *state = States::Integer1 {
-                                is_negative,
-                                bytes_cnt: octects,
-                            };
-                        }
-                        INT_ID => {
-                            // get used octects
-                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
-
-                            if self.version_major == 3 {
-                                octects += 1;
-                            }
-
-                            if self.version_major == 3 {
-                                *state = States::Integer3 { bytes_cnt: octects };
-                            } else {
-                                // negative number
-                                *state = States::Integer1 {
-                                    is_negative: false,
-                                    bytes_cnt: octects,
-                                };
-                            }
+                        VINT_ID | U_VINT_ID | INT_ID => {
+                            *state = States::IntegerHead;
+                            continue; // skip buffer.reset at the end of States::Value
                         }
                         STRING_ID => {
-                            // get used octects
-                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
-                            *state = States::StrLen { octects };
+                            *state = States::StrHead;
+                            continue; // skip buffer.reset at the end of States::Value
                         }
                         BIN_ID => {
                             // get used octects
@@ -440,6 +427,11 @@ impl Tokenizer {
                         DATETIME_ID => {
                             *state = States::DateTime;
                         }
+                        FRPS_DATA => {
+                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize + 1usize;
+
+                            *state = States::DataHead { octects };
+                        }
                         _ => {
                             // dbg!(src.pos, &src.src[src.pos..], &self.buffer, cb);
                             cb.error("unknown type");
@@ -450,46 +442,84 @@ impl Tokenizer {
                     self.buffer.reset();
 
                     // Check if we are processing arguments for call and
-                    // in case of fault check that values are of correct
-                    // type and number
                     match &mut self.context {
                         Context::Call { args: arg } => *arg += 1,
-                        Context::Fault { args: arg } => {
-                            // fault can have only 2 params:
-                            //  1st - Int
-                            //  2nd - String
-                            //  more or less arguments is error
-                            if *arg == 0 {
-                                match *state {
-                                    States::Integer1 {
-                                        is_negative: _,
-                                        bytes_cnt: _,
-                                    }
-                                    | States::Integer3 { bytes_cnt: _ } => {}
-                                    _ => {
-                                        cb.error("invalid fault");
-                                        return Err(src.pos);
-                                    }
-                                }
-                            } else if *arg == 1 {
-                                match *state {
-                                    States::StrLen { octects: _ } => {}
-                                    _ => {
-                                        cb.error("invalid fault");
-                                        return Err(src.pos);
-                                    }
-                                }
-                            } else if *arg == 2 {
-                                cb.error("invalid fault");
-                                return Err(src.pos);
-                            }
-                            *arg += 1;
-                        }
                         _ => {}
                     }
                 }
 
-                // Protocol version 3.0 zigzack
+                // Extract Int into separate state for Fault to be able specify
+                // exact type of value expected next in data
+                States::ValueInt => {
+                    // first byte is value type
+                    if !self.buffer.consume(1, &mut src) {
+                        assert!(src.is_all_consumed());
+                        // when we processing method arguments we dont need data
+                        return Ok((self.arg_context(), src.consumed()));
+                    }
+
+                    *state = States::IntegerHead;
+                }
+
+                States::IntegerHead => {
+                    match self.buffer.data[0] & TYPE_MASK {
+                        VINT_ID | U_VINT_ID => {
+                            // get used octects
+                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+
+                            if self.version_major == 1 {
+                                cb.error("invalid type");
+                                return Err(src.pos);
+                            }
+                            octects += 1;
+                            // negative number
+                            let is_negative = (self.buffer.data[0] & VINT_ID) != 0;
+                            *state = States::Integer1 {
+                                is_negative,
+                                bytes_cnt: octects,
+                            };
+                        }
+                        INT_ID => {
+                            // get used octects
+                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+
+                            if self.version_major == 3 {
+                                octects += 1;
+                            }
+
+                            if self.version_major == 3 {
+                                *state = States::Integer3 { bytes_cnt: octects };
+                            } else {
+                                // negative number
+                                *state = States::Integer1 {
+                                    is_negative: false,
+                                    bytes_cnt: octects,
+                                };
+                            }
+                        }
+                        _ => {
+                            cb.error("invalid type id");
+                            return Err(src.pos);
+                        }
+                    }
+
+                    self.buffer.reset();
+                }
+
+                // Extract String into separate state for Fault to be able
+                // exact type of value expected next in data
+                States::ValueString => {
+                    // first byte is value type
+                    if !self.buffer.consume(1, &mut src) {
+                        assert!(src.is_all_consumed());
+                        // when we processing method arguments we dont need data
+                        return Ok((self.arg_context(), src.consumed()));
+                    }
+
+                    *state = States::StrHead;
+                }
+
+                // Protocol version 3.0 zigzag encoded int
                 States::Integer3 { bytes_cnt } => {
                     if !self.buffer.consume(*bytes_cnt, &mut src) {
                         assert!(src.is_all_consumed());
@@ -533,6 +563,20 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
                 // String
+                States::StrHead => {
+                    match self.buffer.data[0] & TYPE_MASK {
+                        STRING_ID => {
+                            // get used octects
+                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+                            *state = States::StrLen { octects };
+                        }
+                        _ => {
+                            cb.error("invalid type id");
+                            return Err(src.pos);
+                        }
+                    }
+                    self.buffer.reset();
+                }
                 States::StrLen { octects } => {
                     let bytes_cnt = if self.version_major != 1 {
                         *octects + 1
@@ -662,7 +706,7 @@ impl Tokenizer {
 
                 States::BinData { length, processed } => {
                     assert!(*processed <= *length, "invalid state");
-                    // Do we have any binary data and is not 0 lenght?
+                    // Do we have any binary data and is not 0 length?
                     if (*processed != *length) && src.is_all_consumed() {
                         return Ok((true, src.consumed()));
                     }
@@ -844,33 +888,6 @@ impl Tokenizer {
 
                     *state = States::Pop;
                 }
-
-                States::Response => {
-                    let run = cb.response();
-                    if !run {
-                        //dbg!(src.pos, &src.src[src.pos..], cb);
-                        cb.error("cb::response in Response failed");
-                        return Err(src.pos);
-                    }
-
-                    *state = States::Finish;
-                    self.stack.push(States::Value); // Value
-                }
-
-                States::Fault => {
-                    let run = cb.fault();
-                    if !run {
-                        //dbg!(src.pos, &src.src[src.pos..], cb);
-                        cb.error("cb::fault in Fault failed");
-                        return Err(src.pos);
-                    }
-
-                    *state = States::Finish;
-                    self.context = Context::Fault { args: 0 };
-                    self.stack.push(States::Value); // Message
-                    self.stack.push(States::Value); // status code
-                }
-
                 States::Double => {
                     if !self.buffer.consume(8, &mut src) {
                         assert!(src.is_all_consumed());
@@ -984,6 +1001,21 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
 
+                States::Pop => {
+                    self.buffer.reset();
+                    self.stack.pop();
+
+                    // If we started process method arguments try to read Value
+                    //  again  when stack is empty
+                    // Fault put to 2 values to stack so we dont have to care
+                    if self.stack.is_empty() {
+                        match self.context {
+                            Context::Call { args: _ } => self.stack.push(States::Value),
+                            _ => {}
+                        }
+                    }
+                }
+
                 States::Finish => {
                     // Detect calling tokenizer after it returned not needed data
                     // and there are unexpected data in source stream
@@ -994,6 +1026,84 @@ impl Tokenizer {
 
                     // Don't pop stack, keep finish state to detect unexpected data
                     return Ok((false, src.consumed()));
+                }
+
+                States::DataInit => {
+                    // first byte is data type or fault
+                    if !self.buffer.consume(1, &mut src) {
+                        assert!(src.is_all_consumed());
+                        // when we processing data we dont need data
+                        return Ok((false, src.consumed()));
+                    }
+
+                    match self.buffer.data[0] & TYPE_MASK {
+                        FRPS_DATA => {
+                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize + 1usize;
+                            *state = States::DataHead { octects };
+                        }
+                        FAULT_RESPOSE_ID => *state = States::Fault,
+                        _ => {
+                            cb.error("unknown type id");
+                            return Err(src.pos);
+                        }
+                    }
+
+                    self.buffer.reset();
+                }
+
+                States::DataHead { octects } => {
+                    self.context = Context::Data { len: 0 };
+                    *state = States::DataLen { octects: *octects };
+
+                    // Check that data started after response was fully parsed
+                    if self.stack.len() != 1 {
+                        dbg!(&self.stack);
+                        cb.error("unexpected data end");
+                        return Err(src.pos);
+                    }
+                }
+
+                States::DataLen { octects } => {
+                    // read array len
+                    if !self.buffer.consume(*octects, &mut src) {
+                        assert!(src.is_all_consumed());
+                        return Ok((true, src.consumed()));
+                    }
+
+                    let length = read_i64(&self.buffer.data[0..*octects]) as usize;
+                    *state = States::Data {
+                        length,
+                        processed: 0,
+                    };
+                }
+
+                States::Data { length, processed } => {
+                    assert!(*processed <= *length, "invalid state");
+                    // Do we have any stream data and is not 0 length?
+                    if (*processed != *length) && src.is_all_consumed() {
+                        return Ok((true, src.consumed()));
+                    }
+
+                    // Process available or missing part
+                    let cnt = cmp::min(src.available(), *length - *processed);
+                    let run = cb.stream_data(src.data(cnt));
+                    if !run {
+                        //dbg!(src.pos, &src.src[src.pos..], cb);
+                        cb.error("cb::data_stream in BinData failed");
+                        return Err(src.pos);
+                    }
+
+                    // update processed data
+                    src.advance(cnt);
+                    *processed += cnt;
+
+                    // did we process all stream data?
+                    if processed != length {
+                        assert!(src.is_all_consumed());
+                        return Ok((true, src.consumed()));
+                    }
+
+                    *state = States::Pop;
                 }
             }
         }
@@ -1024,7 +1134,6 @@ fn read_i64(s: &[u8]) -> i64 {
    with positive values even and negative values odd
    starting around zero.
    This saves transfer space and unifies integer encoding.
-   
    * -1 -> -9223372036854775808
    *  0 -> 0
    *  1 -> -1
@@ -1032,7 +1141,6 @@ fn read_i64(s: &[u8]) -> i64 {
    *  3 -> -2
    *  4 -> 2
    * ...
-    
    a = -9223372036854775808 Min i64
    1000000000000000000000000000000000000000000000000000000000000000
    a << 1
@@ -1104,7 +1212,6 @@ fn read_i64(s: &[u8]) -> i64 {
    int64_t encode(int64_t n) {
        return ((n << 1) ^ (n >> 63));
    }
-   
    static int64_t decode(int64_t s) {
        uint64_t n = static_cast<uint64_t>(s);
        return static_cast<int64_t>((n >> 1) ^ (-(s & 1)));

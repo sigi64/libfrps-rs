@@ -134,6 +134,7 @@ impl Callback for ValueTreeBuilder {
 
     /* Stop on false, continue on true */
     fn stream_data(&mut self, v: &[u8]) -> bool {
+        println!("get data len: {}", v.len());
         //self.data.push(v);
         true
     }

@@ -250,7 +250,14 @@ mod tests {
 
             if line.starts_with(' ') || (line.len() == 0) {
                 if !frps_data.is_empty() {
-                    run_test(&cnt, &line_cnt, &test_name, &frps_data, &result, &binary_data);
+                    run_test(
+                        &cnt,
+                        &line_cnt,
+                        &test_name,
+                        &frps_data,
+                        &result,
+                        &binary_data,
+                    );
                 }
 
                 // clean for next test
@@ -298,9 +305,8 @@ mod tests {
 
         let mut data_after_end = false;
         let mut need_data = true;
-        
         // First separete data by `"` and then feed tokenizer with all data,
-        // regardless tokenizer returned that is not expecting_data. 
+        // regardless tokenizer returned that is not expecting_data.
         // This we will test that tokenizer detect 'data after end' cases.
         'outer: for p in frps_data.split('"') {
             let mut chunk_size: usize = 0;
@@ -323,18 +329,9 @@ mod tests {
                     need_data = expecting_data;
                     if !expecting_data {
                         data_after_end = processed < chunk_size;
-                        // match call.what {
-                        //     // Method arguments are optional, so Tokenizer returns
-                        //     // not expecting data. If we have data we try to get values
-                        //     ParsedStatus::MethodCall(_) => {}
-                        //     ParsedStatus::Fault => {
-                        //         // check fault that has 2 params int & string
-                        //         if call.values.len() != 2 {
-                        //             invalid_fault = true;
-                        //         }
-                        //     }
-                        //     _ => break 'outer,
-                        // }
+                        if data_after_end {
+                            break 'outer;
+                        }
                     }
                 }
                 Err(_pos) => {
@@ -371,10 +368,10 @@ mod tests {
         let res = test_file("tests/frpc.tests");
         assert!(res.is_ok());
     }
-
-    //     #[test]
-    //     fn test_frps() {
-    //         let res = test_file("tests/frps.tests");
-    //         assert!(res.is_ok());
-    //     }
+    
+    #[test]
+    fn test_frps() {
+        let res = test_file("tests/frps.tests");
+        assert!(res.is_ok());
+    }
 }

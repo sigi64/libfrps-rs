@@ -167,7 +167,7 @@ error(invalid fault)
 #### Integers ####
 ##################
 @v3 integer in v2 stream
-CA11 0200 70 50 01 06 "badint" 09 e803
+CA11 0200 70 50 01 06 "badint" 09 e8 03
 error(data after end)
 
 @v3 integer in v3 stream is okay
