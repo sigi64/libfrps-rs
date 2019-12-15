@@ -66,7 +66,7 @@ de de ed be ed be ef ef
 ################
 @call help("help") with data
 #MGC VER  CALL    "help" STR   "what" DATA
-CA11 0200 68   04 "help" 20 04 "what" 0204000000DEADBEEF
+CA11 0200 68   04 "help" 20 04 "what" 02 04000000 DEADBEEF
 help("what")
 de ad be ef
 

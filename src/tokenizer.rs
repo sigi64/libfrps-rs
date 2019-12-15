@@ -17,13 +17,13 @@ enum States {
     ValueInt,
     ValueString,
     Pop,
-    IntegerHead,
+    IntegerHead { head: u8 },
     Integer1 { is_negative: bool, bytes_cnt: usize },
     Integer3 { bytes_cnt: usize },
     Double,
     ArrayInit { octects: usize },
     ArrayItems { len: usize },
-    StrHead,
+    StrHead { head: u8 },
     StrLen { octects: usize },
     StrData { length: usize, processed: usize },
     BinLen { octects: usize },
@@ -35,7 +35,6 @@ enum States {
     DateTime,
     Finish,
     DataInit,
-    DataHead { octects: usize }, // begin of data state of frps part
     DataLen { octects: usize },
     Data { length: usize, processed: usize },
 }
@@ -168,7 +167,6 @@ enum Context {
     Response,
     Call { args: usize },
     Fault { args: usize },
-    Data { len: usize },
 }
 
 pub struct Tokenizer {
@@ -194,7 +192,7 @@ impl Tokenizer {
         }
     }
 
-    fn arg_context(&self) -> bool {
+    fn need_data(&self) -> bool {
         match &self.context {
             Context::Fault { args: arg } => *arg < (3 as usize),
             Context::Call { args: _ } => false,
@@ -333,8 +331,10 @@ impl Tokenizer {
                         return Err(src.pos);
                     }
 
+                    // data or value follows. In FRPS data can be interleaved
+                    // with values:: E.G. RS {... DATA .. VAl .. DATA ... VAl }
                     *state = States::DataInit;
-                    self.stack.push(States::Value); // Value
+                    self.stack.push(States::Value);
                 }
 
                 States::Fault => {
@@ -356,17 +356,19 @@ impl Tokenizer {
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
                         // when we processing method arguments we dont need data
-                        return Ok((self.arg_context(), src.consumed()));
+                        return Ok((self.need_data(), src.consumed()));
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
                         VINT_ID | U_VINT_ID | INT_ID => {
-                            *state = States::IntegerHead;
-                            continue; // skip buffer.reset at the end of States::Value
+                            *state = States::IntegerHead {
+                                head: self.buffer.data[0],
+                            };
                         }
                         STRING_ID => {
-                            *state = States::StrHead;
-                            continue; // skip buffer.reset at the end of States::Value
+                            *state = States::StrHead {
+                                head: self.buffer.data[0],
+                            };
                         }
                         BIN_ID => {
                             // get used octects
@@ -428,9 +430,18 @@ impl Tokenizer {
                             *state = States::DateTime;
                         }
                         FRPS_DATA => {
-                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize + 1usize;
+                            let octects: usize = match self.buffer.data[0] & OCTET_CNT_MASK {
+                                0 => 0,
+                                1 => 2,
+                                2 => 4,
+                                4 => 8,
+                                _ => {
+                                    cb.error("invalid type");
+                                    return Err(src.pos);
+                                }
+                            };
 
-                            *state = States::DataHead { octects };
+                            *state = States::DataLen { octects };
                         }
                         _ => {
                             // dbg!(src.pos, &src.src[src.pos..], &self.buffer, cb);
@@ -455,17 +466,20 @@ impl Tokenizer {
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
                         // when we processing method arguments we dont need data
-                        return Ok((self.arg_context(), src.consumed()));
+                        return Ok((true, src.consumed()));
                     }
 
-                    *state = States::IntegerHead;
+                    *state = States::IntegerHead {
+                        head: self.buffer.data[0],
+                    };
+                    self.buffer.reset();
                 }
 
-                States::IntegerHead => {
-                    match self.buffer.data[0] & TYPE_MASK {
+                States::IntegerHead { head } => {
+                    match *head & TYPE_MASK {
                         VINT_ID | U_VINT_ID => {
                             // get used octects
-                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+                            let mut octects = (*head & OCTET_CNT_MASK) as usize;
 
                             if self.version_major == 1 {
                                 cb.error("invalid type");
@@ -473,7 +487,7 @@ impl Tokenizer {
                             }
                             octects += 1;
                             // negative number
-                            let is_negative = (self.buffer.data[0] & VINT_ID) != 0;
+                            let is_negative = (*head & VINT_ID) != 0;
                             *state = States::Integer1 {
                                 is_negative,
                                 bytes_cnt: octects,
@@ -481,7 +495,7 @@ impl Tokenizer {
                         }
                         INT_ID => {
                             // get used octects
-                            let mut octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+                            let mut octects = (*head & OCTET_CNT_MASK) as usize;
 
                             if self.version_major == 3 {
                                 octects += 1;
@@ -513,10 +527,13 @@ impl Tokenizer {
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
                         // when we processing method arguments we dont need data
-                        return Ok((self.arg_context(), src.consumed()));
+                        return Ok((true, src.consumed()));
                     }
 
-                    *state = States::StrHead;
+                    *state = States::StrHead {
+                        head: self.buffer.data[0],
+                    };
+                    self.buffer.reset();
                 }
 
                 // Protocol version 3.0 zigzag encoded int
@@ -563,11 +580,11 @@ impl Tokenizer {
                     *state = States::Pop;
                 }
                 // String
-                States::StrHead => {
-                    match self.buffer.data[0] & TYPE_MASK {
+                States::StrHead { head } => {
+                    match *head & TYPE_MASK {
                         STRING_ID => {
                             // get used octects
-                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize;
+                            let octects = (*head & OCTET_CNT_MASK) as usize;
                             *state = States::StrLen { octects };
                         }
                         _ => {
@@ -575,7 +592,6 @@ impl Tokenizer {
                             return Err(src.pos);
                         }
                     }
-                    self.buffer.reset();
                 }
                 States::StrLen { octects } => {
                     let bytes_cnt = if self.version_major != 1 {
@@ -1010,7 +1026,9 @@ impl Tokenizer {
                     // Fault put to 2 values to stack so we dont have to care
                     if self.stack.is_empty() {
                         match self.context {
-                            Context::Call { args: _ } => self.stack.push(States::Value),
+                            Context::Call { args: _ } => {
+                                self.stack.push(States::Value)
+                            }
                             _ => {}
                         }
                     }
@@ -1032,14 +1050,24 @@ impl Tokenizer {
                     // first byte is data type or fault
                     if !self.buffer.consume(1, &mut src) {
                         assert!(src.is_all_consumed());
-                        // when we processing data we dont need data
+                        // data is optional so we dont need data
                         return Ok((false, src.consumed()));
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
                         FRPS_DATA => {
-                            let octects = (self.buffer.data[0] & OCTET_CNT_MASK) as usize + 1usize;
-                            *state = States::DataHead { octects };
+                            let octects: usize = match self.buffer.data[0] & OCTET_CNT_MASK {
+                                0 => 0,
+                                1 => 2,
+                                2 => 4,
+                                4 => 8,
+                                _ => {
+                                    cb.error("invalid type");
+                                    return Err(src.pos);
+                                }
+                            };
+
+                            *state = States::DataLen { octects };
                         }
                         FAULT_RESPOSE_ID => *state = States::Fault,
                         _ => {
@@ -1051,18 +1079,6 @@ impl Tokenizer {
                     self.buffer.reset();
                 }
 
-                States::DataHead { octects } => {
-                    self.context = Context::Data { len: 0 };
-                    *state = States::DataLen { octects: *octects };
-
-                    // Check that data started after response was fully parsed
-                    if self.stack.len() != 1 {
-                        dbg!(&self.stack);
-                        cb.error("unexpected data end");
-                        return Err(src.pos);
-                    }
-                }
-
                 States::DataLen { octects } => {
                     // read array len
                     if !self.buffer.consume(*octects, &mut src) {
@@ -1071,10 +1087,13 @@ impl Tokenizer {
                     }
 
                     let length = read_i64(&self.buffer.data[0..*octects]) as usize;
+
                     *state = States::Data {
                         length,
                         processed: 0,
                     };
+
+                    self.buffer.reset();
                 }
 
                 States::Data { length, processed } => {

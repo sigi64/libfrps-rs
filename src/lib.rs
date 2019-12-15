@@ -249,7 +249,7 @@ mod tests {
             }
 
             if line.starts_with(' ') || (line.len() == 0) {
-                if !frps_data.is_empty() {
+                if !frps_data.is_empty() /*&& cnt == 7*/ {
                     run_test(
                         &cnt,
                         &line_cnt,

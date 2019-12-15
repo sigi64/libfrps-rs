@@ -4,11 +4,13 @@ use crate::{DateTimeVer30, Value};
 use std::collections::HashMap;
 use std::{fmt, str};
 
+/// Items are stored on stack during tokenizing. Strings are incomplete utf8
+/// codepoints hence we have to use `vec<u8>` not `std::String`
 #[derive(Debug)]
 enum Type {
     Array(Vec<Value>),
-    Struct((String, HashMap<String, Value>)), // (key for new item to add, map)
-    Str(String),
+    Struct((Vec<u8>, HashMap<String, Value>)), // (key for new item to add, map)
+    Str(Vec<u8>),
     Binary(Vec<u8>),
 }
 
@@ -49,60 +51,86 @@ impl ValueTreeBuilder {
         }
     }
 
-    fn append_to_last(last: &mut Type, v: Value) {
+    fn append_to_last(last: &mut Type, v: Value) -> bool {
         match last {
             Type::Array(arr) => {
                 arr.push(v);
             }
             Type::Struct((key, strct)) => {
-                strct.insert(std::mem::replace(key, String::new()), v);
+                // check utf8 character validity. We make move a copy of key
+                // vectory for new key
+                let new_key_valid_utf8 = String::from_utf8(key.to_vec());
+                if new_key_valid_utf8.is_err() {
+                    return false; // invalid utf8 string
+                }
+                strct.insert(new_key_valid_utf8.unwrap(), v);
+                // prepare struct to acumulate next item, key is used as
+                // accumulator
+                key.clear();
             }
             _ => {
                 unreachable!();
             }
         }
+        return true;
     }
 }
 
 impl fmt::Display for ValueTreeBuilder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.what {
-            ParsedStatus::Init => 
-                write!(f, "{}", "initialized"),
-            ParsedStatus::Error(msg) =>
-                write!(f, "error({})", msg),
-            ParsedStatus::Response =>
-                write!(f, "{}", &self.values.iter().map(|x| format!("{}", x)).collect::<String>()),
+            ParsedStatus::Init => write!(f, "{}", "initialized"),
+            ParsedStatus::Error(msg) => write!(f, "error({})", msg),
+            ParsedStatus::Response => write!(
+                f,
+                "{}",
+                &self
+                    .values
+                    .iter()
+                    .map(|x| format!("{}", x))
+                    .collect::<String>()
+            ),
             ParsedStatus::MethodCall(name) => {
-                let len =self.values.len();
-                let mut cnt:usize = 0;
+                let len = self.values.len();
+                let mut cnt: usize = 0;
 
-                write!(f, "{}({})", name, &self.values.iter().map(|x| {
-                    cnt += 1;
-                    if cnt < len { format!("{}, ", x) } else { format!("{}", x)}
-                })
-                .collect::<String>())
+                write!(
+                    f,
+                    "{}({})",
+                    name,
+                    &self
+                        .values
+                        .iter()
+                        .map(|x| {
+                            cnt += 1;
+                            if cnt < len {
+                                format!("{}, ", x)
+                            } else {
+                                format!("{}", x)
+                            }
+                        })
+                        .collect::<String>()
+                )
             }
-            ParsedStatus::Fault => 
-                write!(f, "fault({}, {})", &self.values[0], &self.values[1]),
+            ParsedStatus::Fault => write!(f, "fault({}, {})", &self.values[0], &self.values[1]),
         }
     }
 }
 
 impl Callback for ValueTreeBuilder {
-    /** Parsing always stop after this callback return. */
+    /// Parsing always stop after this callback return.
     fn error(&mut self, msg: &str) {
         self.what = ParsedStatus::Error(msg.to_owned())
     }
 
-    /* Stop on false, continue on true */
+    /// Called when version is tokenized. Stop on false, continue on true
     fn version(&mut self, major_version: u8, minor_version: u8) -> bool {
         self.major_version = major_version;
         self.minor_version = minor_version;
         return true;
     }
 
-    /* Stop on false, continue on true */
+    // Stop on false, continue on true
     fn call(&mut self, method: &str, lenght: usize) -> bool {
         // Method can be called multiple times
         match &mut self.what {
@@ -120,19 +148,19 @@ impl Callback for ValueTreeBuilder {
         return true;
     }
 
-    /* Stop on false, continue on true */
+    /// Stop on false, continue on true
     fn response(&mut self) -> bool {
         self.what = ParsedStatus::Response;
         true
     }
 
-    /* Stop on false, continue on true */
+    /// Stop on false, continue on true
     fn fault(&mut self) -> bool {
         self.what = ParsedStatus::Fault;
         return true;
     }
 
-    /* Stop on false, continue on true */
+    /// Stop on false, continue on true
     fn stream_data(&mut self, v: &[u8]) -> bool {
         println!("get data len: {}", v.len());
         //self.data.push(v);
@@ -142,8 +170,7 @@ impl Callback for ValueTreeBuilder {
     /* Stop on false, continue on true */
     fn null(&mut self) -> bool {
         if let Some(last) = self.stack.last_mut() {
-            ValueTreeBuilder::append_to_last(last, Value::Null);
-            return true;
+            return ValueTreeBuilder::append_to_last(last, Value::Null);
         }
         self.values.push(Value::Null);
         return true;
@@ -151,8 +178,7 @@ impl Callback for ValueTreeBuilder {
 
     fn integer(&mut self, v: i64) -> bool {
         if let Some(last) = self.stack.last_mut() {
-            ValueTreeBuilder::append_to_last(last, Value::Int(v));
-            return true;
+            return ValueTreeBuilder::append_to_last(last, Value::Int(v));
         }
         self.values.push(Value::Int(v));
         return true;
@@ -161,8 +187,7 @@ impl Callback for ValueTreeBuilder {
     /* Stop on false, continue on true */
     fn boolean(&mut self, v: bool) -> bool {
         if let Some(last) = self.stack.last_mut() {
-            ValueTreeBuilder::append_to_last(last, Value::Bool(v));
-            return true;
+            return ValueTreeBuilder::append_to_last(last, Value::Bool(v));
         }
         self.values.push(Value::Bool(v));
         return true;
@@ -170,8 +195,7 @@ impl Callback for ValueTreeBuilder {
 
     fn double_number(&mut self, v: f64) -> bool {
         if let Some(last) = self.stack.last_mut() {
-            ValueTreeBuilder::append_to_last(last, Value::Double(v));
-            return true;
+            return ValueTreeBuilder::append_to_last(last, Value::Double(v));
         }
         self.values.push(Value::Double(v));
         return true;
@@ -179,8 +203,7 @@ impl Callback for ValueTreeBuilder {
 
     fn datetime(&mut self, v: &DateTimeVer30) -> bool {
         if let Some(last) = self.stack.last_mut() {
-            ValueTreeBuilder::append_to_last(last, Value::DateTime(*v));
-            return true;
+            return ValueTreeBuilder::append_to_last(last, Value::DateTime(*v));
         }
         self.values.push(Value::DateTime(*v));
         return true;
@@ -190,8 +213,7 @@ impl Callback for ValueTreeBuilder {
         if len > MAX_STR_LENGTH {
             return false;
         }
-        let mut v = String::new();
-        v.reserve(len);
+        let v = Vec::with_capacity(len);
         self.stack.push(Type::Str(v));
         return true;
     }
@@ -204,9 +226,7 @@ impl Callback for ValueTreeBuilder {
 
         if let Some(last) = self.stack.last_mut() {
             match last {
-                Type::Str(val) => {
-                    val.insert_str(val.len(), str::from_utf8(&v).unwrap());
-                }
+                Type::Str(val) => val.extend_from_slice(v),
                 _ => return false,
             }
             return true;
@@ -257,17 +277,14 @@ impl Callback for ValueTreeBuilder {
         }
         let mut h = HashMap::new();
         h.reserve(len);
-        let empty_key = String::new();
-        self.stack.push(Type::Struct((empty_key, h)));
+        self.stack.push(Type::Struct((vec![], h)));
         return true;
     }
 
     fn struct_key(&mut self, v: &[u8], _len: usize) -> bool {
         if let Some(last) = self.stack.last_mut() {
             match last {
-                Type::Struct((key, _)) => {
-                    key.insert_str(key.len(), str::from_utf8(&v).unwrap());
-                }
+                Type::Struct((key, _)) => key.extend_from_slice(v),
                 _ => return false,
             }
             return true;
@@ -281,13 +298,20 @@ impl Callback for ValueTreeBuilder {
             let v = match last {
                 Type::Struct((_, v)) => Value::Struct(v),
                 Type::Array(v) => Value::Array(v),
-                Type::Str(v) => Value::Str(v),
+                Type::Str(v) => {
+                    // let check utf8 charactes validity
+                    let v = String::from_utf8(v);
+                    if v.is_err() {
+                        return false; // is not valid utf8 encoded
+                    }
+                    Value::Str(v.unwrap())
+                }
                 Type::Binary(v) => Value::Binary(v),
             };
 
             // append to top
             if let Some(top) = self.stack.last_mut() {
-                ValueTreeBuilder::append_to_last(top, v);
+                return ValueTreeBuilder::append_to_last(top, v);
             } else {
                 // when stack is empty we reach result value
                 // it can be struct, array or single value
