@@ -211,7 +211,7 @@ impl Tokenizer {
         let mut src = SourcePtr::new(src);
 
         while let Some(state) = self.stack.last_mut() {
-            // dbg!(&state);
+            //dbg!(&state);
             match state {
                 States::Init => {
                     // first 4 bytes is header with magic and version
@@ -333,8 +333,8 @@ impl Tokenizer {
 
                     // data or value follows. In FRPS data can be interleaved
                     // with values:: E.G. RS {... DATA .. VAl .. DATA ... VAl }
-                    *state = States::DataInit;
-                    self.stack.push(States::Value);
+                    *state = States::Value;
+                    // self.stack.push(States::Value);
                 }
 
                 States::Fault => {
@@ -347,7 +347,7 @@ impl Tokenizer {
 
                     *state = States::Finish;
                     self.context = Context::Fault { args: 0 };
-                    self.stack.push(States::ValueString); // Message
+                    self.stack.push(States::ValueString); // message string
                     self.stack.push(States::ValueInt); // status code
                 }
 
@@ -1122,7 +1122,7 @@ impl Tokenizer {
                         return Ok((true, src.consumed()));
                     }
 
-                    *state = States::Pop;
+                    *state = States::Value;
                 }
             }
         }
