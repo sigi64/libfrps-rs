@@ -116,110 +116,112 @@ mod tests {
     use enum_extract::let_extract;
     use hex::decode;
 
-    // #[test]
-    // fn tokenize() {
-    //     // serialized frps data
-    //     let data = hex::decode(r#"ca110201680b746573742e6d6574686f644005112006737472696e67580538011050050b656d70747920617272617958000c656d70747920737472756374500013686e75736e6520646f75626c65206369736c6f18d9ded9e411d94cc0026964382a047479706520087175657374696f6e5800500050050b656d70747920617272617958000c656d70747920737472756374500013686e75736e6520646f75626c65206369736c6f18d9ded9e411d94cc0026964382a047479706520087175657374696f6e2800d8b53956784a44f63360301c6a61206e6120746f206d616d206a61207365206e657a74726174696d"#).unwrap();
+    #[test]
+    fn tokenize() {
+        // serialized frps data
+        let data = hex::decode(r#"ca110201680b746573742e6d6574686f644005112006737472696e67580538011050050b656d70747920617272617958000c656d70747920737472756374500013686e75736e6520646f75626c65206369736c6f18d9ded9e411d94cc0026964382a047479706520087175657374696f6e5800500050050b656d70747920617272617958000c656d70747920737472756374500013686e75736e6520646f75626c65206369736c6f18d9ded9e411d94cc0026964382a047479706520087175657374696f6e2800d8b53956784a44f63360301c6a61206e6120746f206d616d206a61207365206e657a74726174696d"#).unwrap();
 
-    //     // result Value tree
-    //     let mut tree = value_tree_builder::ValueTreeBuilder::new();
+        // result Value tree
+        let mut tree = value_tree_builder::ValueTreeBuilder::new();
 
-    //     // Tokenizer
-    //     let mut tokenizer = tokenizer::Tokenizer::new();
-    //     let res = tokenizer.parse(&data, &mut tree);
-    //     if let Err(e) = res {
-    //         println!("Tokenizer returned: {}", e);
-    //     }
-    //     assert_eq!(res.is_ok(), true);
-    //     assert_eq!(tree.major_version, 2);
-    //     assert_eq!(tree.minor_version, 1);
-    //     dbg!(tree.values);
-    // }
+        // Tokenizer
+        let mut tokenizer = tokenizer::Tokenizer::new_frps();
+        let res = tokenizer.parse(&data, &mut tree);
+        if let Err(e) = res {
+            println!("Tokenizer returned: {}", e);
+        }
+        assert_eq!(res.is_ok(), true);
+        assert_eq!(tree.major_version, 2);
+        assert_eq!(tree.minor_version, 1);
+        // dbg!(tree.values);
+    }
 
-    // #[test]
-    // fn serialized_tokenize_fault() {
+    #[test]
+    fn serialized_tokenize_fault() {
+        let mut serializer = Serializer::new();
 
-    //     let mut serializer = Serializer::new();
+        let mut buffer: [u8; 32] = [0; 32];
 
-    //     let mut buffer: [u8; 32] = [0; 32];
+        let res = serializer.write_fault(&mut buffer, 500, "FAULT_TEST");
+        assert_eq!(res.is_ok(), true);
 
-    //     let res = serializer.write_fault(&mut buffer, 500, "FAULT_TEST");
-    //     assert_eq!(res.is_ok(), true);
+        // result Value tree
+        let mut tree = value_tree_builder::ValueTreeBuilder::new();
 
-    //     // result Value tree
-    //     let mut tree = value_tree_builder::ValueTreeBuilder::new();
+        // Tokenizer
+        let mut tokenizer = tokenizer::Tokenizer::new_frpc();
+        let res = tokenizer.parse(&buffer[..res.unwrap()], &mut tree);
+        if let Err(e) = res {
+            println!("Tokenizer returned: {}", e);
+        }
+        assert_eq!(res.is_ok(), true);
+        // dbg!(buffer, tree.values);
+    }
 
-    //     // Tokenizer
-    //     let mut tokenizer = tokenizer::Tokenizer::new();
-    //     let res = tokenizer.parse(&buffer[..res.unwrap()], &mut tree);
-    //     if let Err(e) = res {
-    //         println!("Tokenizer returned: {}", e);
-    //     }
-    //     assert_eq!(res.is_ok(), true);
-    //     dbg!(buffer, tree.values);
-    // }
+    #[test]
+    fn serialize_deserialize_call_with_nested_arrays_and_ints() {
+        // First serialize call with array as value
+        let mut serializer = Serializer::new();
+        let mut buffer: [u8; 256] = [0; 256];
 
-    // #[test]
-    // fn serialize_deserialize_call_with_nested_arrays_and_ints() {
-    //     // First serialize call with array as value
-    //     let mut serializer = Serializer::new();
-    //     let mut buffer: [u8; 256] = [0; 256];
+        let mut written = 0;
+        let cnt = serializer.write_call(&mut buffer, "server.stat");
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
 
-    //     let mut written = 0;
-    //     let cnt = serializer.write_call(&mut buffer, "server.stat");
-    //     assert_eq!(cnt.is_ok(), true);
-    //     written += cnt.unwrap();
+        serializer.reset();
 
-    //     serializer.reset();
+        // [1, [2, 3]]
+        let arr = vec![
+            Value::Int(1),
+            Value::Array(vec![Value::Int(2), Value::Int(3)]),
+        ];
 
-    //     // [1, [2, 3]]
-    //     let arr = vec![
-    //         Value::Int(1),
-    //         Value::Array(vec![Value::Int(2), Value::Int(3)]),
-    //     ];
+        let cnt = serializer.write_value(&mut buffer[written..], &Value::Array(arr));
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
 
-    //     let cnt = serializer.write_value(&mut buffer[written..], &Value::Array(arr));
-    //     assert_eq!(cnt.is_ok(), true);
-    //     written += cnt.unwrap();
+        // println!("Serialized data len: {}", written);
 
-    //     println!("Serialized data len: {}", written);
+        // now deserialize
+        let mut call = value_tree_builder::ValueTreeBuilder::new();
 
-    //     // now deserialize
-    //     let mut call = value_tree_builder::ValueTreeBuilder::new();
+        // Tokenizer
+        let mut tokenizer = tokenizer::Tokenizer::new_frpc();
+        let res = tokenizer.parse(&buffer[0..written], &mut call);
+        if let Err(e) = res {
+            println!("Serializer returned: {}", e);
+        }
 
-    //     // Tokenizer
-    //     let mut tokenizer = tokenizer::Tokenizer::new();
-    //     let res = tokenizer.parse(&buffer[0..written], &mut call);
-    //     if let Err(e) = res {
-    //         println!("Serializer returned: {}", e);
-    //     }
+        assert!(res.is_ok(), "tokenizer returned error");
+        match call.what {
+            ParsedStatus::MethodCall(name) => assert_eq!(name, "server.stat"),
+            _ => assert!(false, "invalid call"),
+        }
+        // call.value == [1, [2, 3]]
+        let_extract!(Value::Array(v), &call.values[0], unreachable!());
 
-    //     assert!(res.is_ok(), "tokenizer returned error");
-    //     assert_eq!(call.method_name, "server.stat");
-    //     // call.value == [1, [2, 3]]
-    //     let_extract!(Value::Array(v), &call.values[0], unreachable!());
+        assert_eq!(v.len(), 2, "there are not 2 elements in array");
 
-    //     assert_eq!(v.len(), 2, "there are not 2 elements in array");
+        // last == [2, 3]
+        if let Some(last) = v.last() {
+            let last_cnt = match last {
+                Value::Array(arr) => arr.len(),
+                _ => 0,
+            };
 
-    //     // last == [2, 3]
-    //     if let Some(last) = v.last() {
-    //         let last_cnt = match last {
-    //             Value::Array(arr) => arr.len(),
-    //             _ => 0,
-    //         };
-
-    //         assert_eq!(
-    //             last_cnt, 2,
-    //             "there are not 2 elements in the last element which is array also"
-    //         );
-    //     }
-    // }
+            assert_eq!(
+                last_cnt, 2,
+                "there are not 2 elements in the last element which is array also"
+            );
+        }
+    }
 
     use std::env;
     use std::fs::File;
     use std::io::{self, prelude::*, BufReader};
 
-    fn test_file(name: &str) -> io::Result<()> {
+    fn test_file(name: &str, is_frps: bool) -> io::Result<()> {
         let mut path = env::current_dir()?;
         path.push(name);
 
@@ -249,7 +251,9 @@ mod tests {
             }
 
             if line.starts_with(' ') || (line.len() == 0) {
-                if !frps_data.is_empty() && cnt == 34 {
+                if !frps_data.is_empty()
+                /*&& cnt == 9*/
+                {
                     run_test(
                         &cnt,
                         &line_cnt,
@@ -257,6 +261,7 @@ mod tests {
                         &frps_data,
                         &result,
                         &binary_data,
+                        is_frps,
                     );
                 }
 
@@ -294,8 +299,13 @@ mod tests {
         frps_data: &String,
         result: &String,
         binary_data: &String,
+        is_frps: bool,
     ) {
-        let mut tokenizer = tokenizer::Tokenizer::new();
+        let mut tokenizer = if is_frps {
+            tokenizer::Tokenizer::new_frps()
+        } else {
+            tokenizer::Tokenizer::new_frpc()
+        };
         let mut call = value_tree_builder::ValueTreeBuilder::new();
         let mut in_string = false;
         // println!(
@@ -361,17 +371,32 @@ mod tests {
                 line, order, test_name, result, res
             );
         }
+
+        if !binary_data.is_empty() {
+            let binary_data: String = binary_data
+                .chars()
+                .filter(|&c| !c.is_whitespace())
+                .collect();
+
+            let parsed_data = hex::encode(call.data);
+            if binary_data != parsed_data {
+                println!(
+                    "Failed test line:{} - #{} - {} => streamdata {} != {}",
+                    line, order, test_name, binary_data, parsed_data
+                );
+            }
+        }
     }
 
-    // #[test]
-    // fn test_frpc() {
-    //     let res = test_file("tests/frpc.tests");
-    //     assert!(res.is_ok());
-    // }
-    
+    #[test]
+    fn test_frpc() {
+        let res = test_file("tests/frpc.tests", false);
+        assert!(res.is_ok());
+    }
+
     #[test]
     fn test_frps() {
-        let res = test_file("tests/frps.tests");
+        let res = test_file("tests/frps.tests", true);
         assert!(res.is_ok());
     }
 }

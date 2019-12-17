@@ -133,7 +133,7 @@ fault(500, "FAULT_TEST")
 
 @fault without code
 CA11 0200 78    200a "FAULT_TEST"
-error(invalid fault)
+error(invalid type id)
 
 @fault without text
 CA11 0200 78    39   f401
@@ -153,12 +153,12 @@ error(data after end)
 
 @fault, invalid, duplicate int
 CA11 0200 78 39 f401 38 01 200a "FAULT_TEST"
-error(invalid fault)
+error(invalid type id)
 
 @invalid fault - swapped order
 #MGC VER  FAULT PINT(500)
 CA11 0200 78 200a "FAULT_TEST" 39 f401
-error(invalid fault)
+error(invalid type id)
 
 # Fault with other types than int/string combo
 # Fault with duplicate items

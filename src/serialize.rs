@@ -629,63 +629,63 @@ mod tests {
         println!("the slice has {} elements", slice.len());
     }
 
-    // #[test]
-    // fn wire_format() {
-    //     let mut buffer: [u8; 256] = [0; 256];
+    #[test]
+    fn wire_format() {
+        let mut buffer: [u8; 256] = [0; 256];
 
-    //     let cnt = write_magic(1u8, &mut buffer).unwrap();
+        let cnt = write_magic(1u8, &mut buffer).unwrap();
 
-    //     analyze_slice(&buffer[0..5]);
-    //     assert_eq!(cnt, 5);
+        analyze_slice(&buffer[0..5]);
+        assert_eq!(cnt, 5);
 
-    //     let cnt = write_bool(false, &mut buffer[cnt..]).unwrap();
+        let cnt = write_bool(false, &mut buffer[cnt..]).unwrap();
 
-    //     analyze_slice(&buffer[0..6]);
-    //     assert_eq!(cnt, 1);
+        analyze_slice(&buffer[0..6]);
+        assert_eq!(cnt, 1);
 
-    //     let cnt = write_int(1024123123, &mut buffer[cnt..]).unwrap();
-    //     assert_eq!(cnt, 5);
+        let cnt = write_int(1024123123, &mut buffer[cnt..]).unwrap();
+        assert_eq!(cnt, 5);
 
-    //     let cnt = write_double(1024123.123, &mut buffer[cnt..]).unwrap();
-    //     assert_eq!(cnt, 9);
-    // }
+        let cnt = write_double(1024123.123, &mut buffer[cnt..]).unwrap();
+        assert_eq!(cnt, 9);
+    }
 
-    // #[test]
-    // fn serializer() {
-    //     let mut serializer = Serializer::new();
-    //     let mut buffer: [u8; 256] = [0; 256];
+    #[test]
+    fn serializer() {
+        let mut serializer = Serializer::new();
+        let mut buffer: [u8; 256] = [0; 256];
 
-    //     let mut written = 0;
-    //     let cnt = serializer.write_call(&mut buffer, "server.stat");
-    //     assert_eq!(cnt.is_ok(), true);
-    //     written += cnt.unwrap();
+        let mut written = 0;
+        let cnt = serializer.write_call(&mut buffer, "server.stat");
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
 
-    //     serializer.reset();
-    //     let val = Value::Int(1224);
-    //     let cnt = serializer.write_value(&mut buffer[written..], &val);
-    //     assert_eq!(cnt.is_ok(), true);
-    //     written += cnt.unwrap();
+        serializer.reset();
+        let val = Value::Int(1224);
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
 
-    //     serializer.reset();
-    //     let val = Value::Double(12.24);
-    //     let cnt = serializer.write_value(&mut buffer[written..], &val);
-    //     assert_eq!(cnt.is_ok(), true);
-    //     written += cnt.unwrap();
+        serializer.reset();
+        let val = Value::Double(12.24);
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
 
-    //     serializer.reset();
-    //     let val = Value::Str(String::from("Ahoj tady string"));
-    //     let cnt = serializer.write_value(&mut buffer[written..], &val);
-    //     assert_eq!(cnt.is_ok(), true);
-    //     written += cnt.unwrap();
+        serializer.reset();
+        let val = Value::Str(String::from("Ahoj tady string"));
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
 
-    //     serializer.reset();
-    //     let val = Value::Array(vec![
-    //         Value::Int(1),
-    //         Value::Str(String::from("Ahoj tady string")),
-    //     ]);
-    //     let cnt = serializer.write_value(&mut buffer[written..], &val);
-    //     assert_eq!(cnt.is_ok(), true);
-    //     written += cnt.unwrap();
-    //     println!("Serialized data len: {}", written);
-    // }
+        serializer.reset();
+        let val = Value::Array(vec![
+            Value::Int(1),
+            Value::Str(String::from("Ahoj tady string")),
+        ]);
+        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        written += cnt.unwrap();
+        println!("Serialized data len: {}", written);
+    }
 }

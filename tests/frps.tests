@@ -129,16 +129,16 @@ error(too large array)
 @valid fault
 #MGC VER  FAULT PINT(500)
 CA11 0200 78    39   f401     200a "FAULT_TEST"
-fault(500, FAULT_TEST)
+fault(500, "FAULT_TEST")
 
 @valid fault, v3 protocol int
 #MGC VER  FAULT INT(500)
 CA11 0300 78    09   e803     200a "FAULT_TEST"
-fault(500, FAULT_TEST)
+fault(500, "FAULT_TEST")
 
 @fault without code
 CA11 0200 78    200a "FAULT_TEST"
-error(invalid fault)
+error(invalid type id)
 
 @fault without text
 CA11 0200 78    39   f401
@@ -150,25 +150,25 @@ error(unexpected data end)
 
 @fault, valid, different int type (v1)
 CA11 0100 78 0A f401 210a "FAULT_TEST"
-fault(500, FAULT_TEST)
+fault(500, "FAULT_TEST")
 
 @fault, invalid, duplicate string
 CA11 0200 78 39 f401 200b "FAULT_TEST1" 200b "FAULT_TEST2"
-error(invalid fault)
+error(data after end)
 
 @fault, invalid, duplicate int
 CA11 0200 78 39 f401 38 01 200a "FAULT_TEST"
-error(invalid fault)
+error(invalid type id)
 
 @invalid fault - swapped order
 #MGC VER  FAULT PINT(500)
 CA11 0200 78 200a "FAULT_TEST" 39 f401
-error(invalid fault)
+error(invalid type id)
 
 @fault embedded into struct
 #            STRUCT(3)  [0]
 CA11 0201 70 5003       06 "status" 38C8 0D "statusMessage" 7839F401 2005 "Fault"
-fault(500, Fault)
+fault(500, "Fault")
 
 # Fault with other types than int/string combo
 # Fault with duplicate items
@@ -178,7 +178,7 @@ fault(500, Fault)
 ##################
 @v3 integer in v2 stream
 CA11 0200 70 50 01 06 "badint" 09 e803
-error(unexpected data end)
+error(invalid type)
 
 @v3 integer in v3 stream is okay
 CA11 0300 70 50 01 07 "goodint" 09 e803
@@ -268,7 +268,7 @@ CA11 0200 70 50 01 06 "double" 18 00000000 00000000
 
 @double -0
 CA11 0200 70 50 01 06 "double" 18 00000000 00000080
-{double: -0}
+{double: 0}
 
 @double 1
 CA11 0200 70 50 01 06 "double" 18 00000000 0000f03f
@@ -288,12 +288,12 @@ CA11 0200 70 50 01 06 "double" 18 00000000 0000f0ff
 
 @double NaN
 CA11 0200 70 50 01 06 "double" 18 ffffffff ffffff7f
-{double: nan}
+{double: NaN}
 
 # this is kind of fragile, it depends on double dump precision
 @double 1/3
 CA11 0200 70 50 01 06 "double" 18 55555555 5555d53f
-{double: 0.333333}
+{double: 0.3333333333333333}
 
 ################
 #### String ####
@@ -378,7 +378,7 @@ CA11 0200 70 50 01 06 "binary" 30 00
 
 @binary v2 CA FE
 CA11 0200 70 50 01 06 "binary" 30 02 CAFE
-{binary: b"ca fe"}
+{binary: b"cafe"}
 
 @incomplete binary
 CA11 0200 70 50 01 06 "binary" 30 08 CAFE
@@ -417,15 +417,15 @@ error(invalid value)
 @v1 datetime
 # (20170127T12:39:19+0000)       DT ZN UNX       WDSEC  MIN<<1|HR<<7 HR>>1|day<<4  YR<5|D>4|M<1 YR>3
 CA11 0100 70 51 01 08 "datetime" 28 00 773F8B58  9D     4E           B6            23           34
-{datetime: 20170127T12:39:19+0000}
+{datetime: 2017-01-27 12:39:19}
 
 @v2 datetime
 CA11 0200 70 50 01 08 "datetime" 28 00 773F8B58  9D     4E           B6            23           34
-{datetime: 20170127T12:39:19+0000}
+{datetime: 2017-01-27 12:39:19}
 
 @v3 datetime
 CA11 0300 70 50 01 08 "datetime" 28 00 773F8B5800000000  9D     4E           B6            23           34
-{datetime: 20170127T12:39:19+0000}
+{datetime: 2017-01-27 12:39:19}
 
 ###############
 ### Result ####
@@ -518,13 +518,13 @@ error(unknown type)
 
 @fault in response
 CA11 0200 70 50 01 07 "invalid" 78 39 f401 200a "FAULT_TEST"
-fault(500, FAULT_TEST)
+fault(500, "FAULT_TEST")
 
 ###############################
 ### Data after response end ###
 ###############################
 @data after response end
 CA11  0200  70 50 01 06 "status" 38 c8 39 f401
-error(data after end)
+error(unknown type id)
 
 # END

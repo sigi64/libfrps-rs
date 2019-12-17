@@ -155,8 +155,11 @@ impl Callback for ValueTreeBuilder {
     }
 
     /// Stop on false, continue on true
-    fn fault(&mut self) -> bool {
+    fn fault(&mut self) -> bool {        
         self.what = ParsedStatus::Fault;
+        // Fault can apppear in frps almost everywhere
+        self.stack.clear();
+        self.values.clear();
         return true;
     }
 

@@ -167,6 +167,7 @@ enum Context {
     Response,
     Call { args: usize },
     Fault { args: usize },
+    Data,
 }
 
 pub struct Tokenizer {
@@ -178,10 +179,11 @@ pub struct Tokenizer {
     version_minor: u8,
     /// When `true` tokenizer is ready to accept methods arguments (which are optional)
     context: Context,
+    is_frps: bool,
 }
 
 impl Tokenizer {
-    pub fn new() -> Tokenizer {
+    pub fn new_frpc() -> Tokenizer {
         Tokenizer {
             stack: vec![States::Init],
             buffer: Buffer::new(),
@@ -189,13 +191,26 @@ impl Tokenizer {
             version_major: 0,
             version_minor: 0,
             context: Context::Init,
+            is_frps: false,
+        }
+    }
+
+    pub fn new_frps() -> Tokenizer {
+        Tokenizer {
+            stack: vec![States::Init],
+            buffer: Buffer::new(),
+
+            version_major: 0,
+            version_minor: 0,
+            context: Context::Init,
+            is_frps: true,
         }
     }
 
     fn need_data(&self) -> bool {
         match &self.context {
             Context::Fault { args: arg } => *arg < (3 as usize),
-            Context::Call { args: _ } => false,
+            Context::Data | Context::Call { args: _ } => false,
             _ => true,
         }
     }
@@ -334,7 +349,10 @@ impl Tokenizer {
                     // data or value follows. In FRPS data can be interleaved
                     // with values:: E.G. RS {... DATA .. VAl .. DATA ... VAl }
                     *state = States::Value;
-                    // self.stack.push(States::Value);
+                    if self.is_frps {
+                        *state = States::DataInit;
+                        self.stack.push(States::Value);                      
+                    }                    
                 }
 
                 States::Fault => {
@@ -430,6 +448,11 @@ impl Tokenizer {
                             *state = States::DateTime;
                         }
                         FRPS_DATA => {
+                            if !self.is_frps {
+                                cb.error("unknown type");
+                                return Err(src.pos);
+                            }
+
                             let octects: usize = match self.buffer.data[0] & OCTET_CNT_MASK {
                                 0 => 0,
                                 1 => 2,
@@ -442,6 +465,14 @@ impl Tokenizer {
                             };
 
                             *state = States::DataLen { octects };
+                        }
+                        FAULT_RESPOSE_ID => {
+                            if !self.is_frps {
+                                cb.error("unknown type");
+                                return Err(src.pos);
+                            }
+
+                            *state = States::Fault;
                         }
                         _ => {
                             // dbg!(src.pos, &src.src[src.pos..], &self.buffer, cb);
@@ -1026,9 +1057,7 @@ impl Tokenizer {
                     // Fault put to 2 values to stack so we dont have to care
                     if self.stack.is_empty() {
                         match self.context {
-                            Context::Call { args: _ } => {
-                                self.stack.push(States::Value)
-                            }
+                            Context::Call { args: _ } => self.stack.push(States::Value),
                             _ => {}
                         }
                     }
@@ -1068,6 +1097,7 @@ impl Tokenizer {
                             };
 
                             *state = States::DataLen { octects };
+                            self.context = Context::Data;
                         }
                         FAULT_RESPOSE_ID => *state = States::Fault,
                         _ => {
