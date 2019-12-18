@@ -7,7 +7,6 @@ pub use serialize::Serializer;
 pub use tokenizer::Tokenizer;
 pub use value_tree_builder::{ParsedStatus, ValueTreeBuilder};
 
-extern crate chrono;
 use chrono::prelude::{DateTime, NaiveDateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -114,7 +113,6 @@ impl Value {
 mod tests {
     use super::*;
     use enum_extract::let_extract;
-    use hex::decode;
 
     #[test]
     fn tokenize() {
@@ -221,7 +219,11 @@ mod tests {
     use std::fs::File;
     use std::io::{self, prelude::*, BufReader};
 
-    fn test_file(name: &str, is_frps: bool) -> io::Result<()> {
+    fn test_file(
+        name: &str,
+        is_frps: bool,
+        call: impl Fn(&i32, &i32, &String, &String, &String, &String, bool),
+    ) -> io::Result<()> {
         let mut path = env::current_dir()?;
         path.push(name);
 
@@ -254,7 +256,7 @@ mod tests {
                 if !frps_data.is_empty()
                 /*&& cnt == 9*/
                 {
-                    run_test(
+                    call(
                         &cnt,
                         &line_cnt,
                         &test_name,
@@ -292,7 +294,7 @@ mod tests {
         Ok(())
     }
 
-    fn run_test(
+    fn test_by_chunk(
         order: &i32,
         line: &i32,
         test_name: &String,
@@ -319,7 +321,7 @@ mod tests {
         // regardless tokenizer returned that is not expecting_data.
         // This we will test that tokenizer detect 'data after end' cases.
         'outer: for p in frps_data.split('"') {
-            let mut chunk_size: usize = 0;
+            let chunk_size: usize;
             let res = if in_string {
                 // string is encoded as is
                 chunk_size = p.as_bytes().len();
@@ -388,15 +390,227 @@ mod tests {
         }
     }
 
+    // Testing tokenizer by one byte buffer len will go trought all inner states
+    fn test_by_one_byte(
+        order: &i32,
+        line: &i32,
+        test_name: &String,
+        frps_data: &String,
+        result: &String,
+        binary_data: &String,
+        is_frps: bool,
+    ) {
+        let mut tokenizer = if is_frps {
+            tokenizer::Tokenizer::new_frps()
+        } else {
+            tokenizer::Tokenizer::new_frpc()
+        };
+
+        let mut call = value_tree_builder::ValueTreeBuilder::new();
+        let mut in_string = false;
+        // println!(
+        //     "\nRunning test: #{} - {} result:{}",
+        //     order, test_name, result
+        // );
+
+        let mut data_after_end = false;
+        let mut need_data = true;
+        // First separete data by `"` and then feed tokenizer with all data,
+        // regardless tokenizer returned that is not expecting_data.
+        // This we will test that tokenizer detect 'data after end' cases.
+        let mut data = vec![];
+        for p in frps_data.split('"') {
+            if in_string {
+                data.extend_from_slice(p.as_bytes());
+            } else {
+                // filter all whitespace characters from data
+                let no_whitespace: String = p.chars().filter(|&c| !c.is_whitespace()).collect();
+                // convert hex characters to bytes
+                let p = hex::decode(no_whitespace).unwrap();
+                data.extend_from_slice(&p);
+            }
+            in_string = if in_string { false } else { true };
+        }
+
+        for x in 0..data.len() {
+            let res = tokenizer.parse(&data[x..x + 1], &mut call);
+            match res {
+                Ok((expecting_data, processed)) => {
+                    need_data = expecting_data;
+                    if !expecting_data {
+                        data_after_end = processed < 1;
+                        if data_after_end {
+                            break;
+                        }
+                    }
+                }
+                Err(_pos) => {
+                    if !result.starts_with("error") {
+                        assert!(res.is_ok(), "result should not error");
+                    };
+
+                    need_data = false;
+                    data_after_end = false;
+                    break;
+                }
+            }
+        }
+
+        let res = if need_data {
+            String::from("error(unexpected data end)")
+        } else if data_after_end {
+            String::from("error(data after end)")
+        } else {
+            format!("{}", call)
+        };
+
+        if *result != res {
+            println!(
+                "Failed test line:{} - #{} - {} => {} != {}",
+                line, order, test_name, result, res
+            );
+        }
+
+        if !binary_data.is_empty() {
+            let binary_data: String = binary_data
+                .chars()
+                .filter(|&c| !c.is_whitespace())
+                .collect();
+
+            let parsed_data = hex::encode(call.data);
+            if binary_data != parsed_data {
+                println!(
+                    "Failed test line:{} - #{} - {} => streamdata {} != {}",
+                    line, order, test_name, binary_data, parsed_data
+                );
+            }
+        }
+    }
+
+    fn test_serialized_deserialize(
+        order: &i32,
+        line: &i32,
+        test_name: &String,
+        frps_data: &String,
+        result: &String,
+        binary_data: &String,
+        is_frps: bool,
+    ) {
+        // skip errors
+        if result.starts_with("error") {
+            return;
+        }
+
+        let mut tokenizer = if is_frps {
+            tokenizer::Tokenizer::new_frps()
+        } else {
+            tokenizer::Tokenizer::new_frpc()
+        };
+
+        let mut call = value_tree_builder::ValueTreeBuilder::new();
+        let mut in_string = false;
+        println!(
+            "\nRunning test: #{} - {} result:{}",
+            order, test_name, result
+        );
+
+        // First separate data by `"` and then feed tokenizer with all data,
+        // regardless tokenizer returned that is not expecting_data.
+        // This we will test that tokenizer detect 'data after end' cases.
+        let mut data = vec![];
+        for p in frps_data.split('"') {
+            if in_string {
+                data.extend_from_slice(p.as_bytes());
+            } else {
+                // filter all whitespace characters from data
+                let no_whitespace: String = p.chars().filter(|&c| !c.is_whitespace()).collect();
+                // convert hex characters to bytes
+                let p = hex::decode(no_whitespace).unwrap();
+                data.extend_from_slice(&p);
+            }
+            in_string = if in_string { false } else { true };
+        }
+        let res = tokenizer.parse(&data[0..], &mut call);
+        match res {
+            Ok((expecting_data, _processe)) => {
+                assert!(expecting_data == false, "should not expect data")
+            }
+            Err(_pos) => assert!(res.is_ok(), "result should not error"),
+        }
+
+        if !binary_data.is_empty() {
+            let binary_data: String = binary_data
+                .chars()
+                .filter(|&c| !c.is_whitespace())
+                .collect();
+
+            let parsed_data = hex::encode(call.data);
+            if binary_data != parsed_data {
+                println!(
+                    "Failed test line:{} - #{} - {} => streamdata {} != {}",
+                    line, order, test_name, binary_data, parsed_data
+                );
+            }
+        }
+
+        // now try to serialize
+        let mut serializer = Serializer::new();
+
+        let mut buffer = vec![];
+        buffer.reserve(data.len());
+        let mut cnt: usize = 0;
+        match call.what {
+            ParsedStatus::Fault => {
+                let r = serializer.write_fault(&mut buffer[cnt..], 0, "ahoj");
+                cnt += r.unwrap();
+            }
+            ParsedStatus::MethodCall(name) => {
+                let r = serializer.write_call(&mut buffer[cnt..], name.as_str());
+                cnt += r.unwrap();
+            }
+            ParsedStatus::Response => {}
+            _ => return,
+        }
+        for i in 0..call.values.len() {
+            serializer.reset();
+            let r = serializer.write_value(&mut buffer[cnt..], &call.values[i]);
+            cnt += r.unwrap();
+        }
+    }
+
     #[test]
     fn test_frpc() {
-        let res = test_file("tests/frpc.tests", false);
+        let res = test_file("tests/frpc.tests", false, &test_by_chunk);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_frpc_by_one_byte() {
+        let res = test_file("tests/frpc.tests", false, &test_by_one_byte);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_frpc_serialized_deserialize() {
+        let res = test_file("tests/frpc.tests", false, &test_serialized_deserialize);
         assert!(res.is_ok());
     }
 
     #[test]
     fn test_frps() {
-        let res = test_file("tests/frps.tests", true);
+        let res = test_file("tests/frps.tests", true, &test_by_chunk);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_frps_by_one_byte() {
+        let res = test_file("tests/frps.tests", true, &test_by_one_byte);
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_frps_serialized_deserialize() {
+        let res = test_file("tests/frps.tests", true, &test_serialized_deserialize);
         assert!(res.is_ok());
     }
 }

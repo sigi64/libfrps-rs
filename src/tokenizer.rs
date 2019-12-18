@@ -207,6 +207,7 @@ impl Tokenizer {
         }
     }
 
+    /// return `true` when tokenizer expect data to tokenize to reach valid state
     fn need_data(&self) -> bool {
         match &self.context {
             Context::Fault { args: arg } => *arg < (3 as usize),
@@ -1268,10 +1269,11 @@ fn read_i64(s: &[u8]) -> i64 {
 */
 
 fn zigzag_decode(s: &[u8]) -> i64 {
+    let unsigned_shr = |n : i64| {
+        let n = u64::from_le_bytes(n.to_le_bytes()) >> 1;
+        i64::from_le_bytes(n.to_le_bytes())
+    };
+
     let s = read_i64(s);
-
-    let n = u64::from_le_bytes(s.to_le_bytes()) >> 1;
-    let n = i64::from_le_bytes(n.to_le_bytes());
-
-    return n ^ (-(s & 1));
+    return unsigned_shr(s) ^ (-(s & 1));
 }
