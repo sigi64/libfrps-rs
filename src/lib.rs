@@ -7,7 +7,7 @@ pub use serialize::Serializer;
 pub use tokenizer::Tokenizer;
 pub use value_tree_builder::{ParsedStatus, ValueTreeBuilder};
 
-use chrono::prelude::{DateTime, NaiveDateTime, Utc};
+use chrono::prelude::{DateTime, NaiveDateTime, Utc, Local};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
@@ -24,6 +24,24 @@ pub struct DateTimeVer30 {
     pub month: u8,
     pub year: u16,
 }
+
+// impl DateTimeVer30 {
+//     pub fn now() -> DateTimeVer30 {
+
+//         let dt =  Local::now();
+//         DateTimeVer30 {
+//             time_zone: dt.timezone().offset_from_ as i16,
+//             unix_time: dt.timestamp(),
+//             week_day: dt.weekday(),
+//             sec: dt.second(),
+//             min: dt.minute(),
+//             hour: dt.hour(),
+//             day: dt.day(),
+//             month: dt.month(),
+//             year: dt.year(),
+//         }
+//     }
+// }
 
 #[derive(Debug)]
 pub enum Value {
@@ -254,7 +272,7 @@ mod tests {
 
             if line.starts_with(' ') || (line.len() == 0) {
                 if !frps_data.is_empty()
-                /*&& cnt == 9*/
+                /*&& cnt == 86*/
                 {
                     call(
                         &cnt,
@@ -487,7 +505,7 @@ mod tests {
         }
     }
 
-    fn test_serialized_deserialize(
+    fn test_serialize_deserialize(
         order: &i32,
         line: &i32,
         test_name: &String,
@@ -501,23 +519,16 @@ mod tests {
             return;
         }
 
-        let mut tokenizer = if is_frps {
-            tokenizer::Tokenizer::new_frps()
-        } else {
-            tokenizer::Tokenizer::new_frpc()
-        };
-
-        let mut call = value_tree_builder::ValueTreeBuilder::new();
-        let mut in_string = false;
-        println!(
-            "\nRunning test: #{} - {} result:{}",
-            order, test_name, result
-        );
+        // println!(
+        //     "\nRunning test: #{} - {} result:{}",
+        //     order, test_name, result
+        // );
 
         // First separate data by `"` and then feed tokenizer with all data,
         // regardless tokenizer returned that is not expecting_data.
         // This we will test that tokenizer detect 'data after end' cases.
         let mut data = vec![];
+        let mut in_string = false;
         for p in frps_data.split('"') {
             if in_string {
                 data.extend_from_slice(p.as_bytes());
@@ -530,6 +541,19 @@ mod tests {
             }
             in_string = if in_string { false } else { true };
         }
+
+        let binary_data: String = binary_data
+            .chars()
+            .filter(|&c| !c.is_whitespace())
+            .collect();
+
+        let mut tokenizer = if is_frps {
+            tokenizer::Tokenizer::new_frps()
+        } else {
+            tokenizer::Tokenizer::new_frpc()
+        };
+
+        let mut call = value_tree_builder::ValueTreeBuilder::new();
         let res = tokenizer.parse(&data[0..], &mut call);
         match res {
             Ok((expecting_data, _processe)) => {
@@ -539,12 +563,7 @@ mod tests {
         }
 
         if !binary_data.is_empty() {
-            let binary_data: String = binary_data
-                .chars()
-                .filter(|&c| !c.is_whitespace())
-                .collect();
-
-            let parsed_data = hex::encode(call.data);
+            let parsed_data = hex::encode(&call.data);
             if binary_data != parsed_data {
                 println!(
                     "Failed test line:{} - #{} - {} => streamdata {} != {}",
@@ -557,25 +576,69 @@ mod tests {
         let mut serializer = Serializer::new();
 
         let mut buffer = vec![];
-        buffer.reserve(data.len());
+        buffer.resize(2 * data.len(), 0); // make buffer large enought
         let mut cnt: usize = 0;
-        match call.what {
+        match &call.what {
             ParsedStatus::Fault => {
-                let r = serializer.write_fault(&mut buffer[cnt..], 0, "ahoj");
+                assert!(
+                    call.values.len() == 2,
+                    "There should be Fault with 2 values"
+                );
+
+                let_extract!(Value::Int(code), &call.values[0], unreachable!());
+                let_extract!(Value::Str(msg), &call.values[1], unreachable!());
+
+                let r = serializer.write_fault(&mut buffer[cnt..], *code, msg.as_str());
                 cnt += r.unwrap();
             }
             ParsedStatus::MethodCall(name) => {
                 let r = serializer.write_call(&mut buffer[cnt..], name.as_str());
                 cnt += r.unwrap();
+                for i in 0..call.values.len() {
+                    serializer.reset();
+                    let r = serializer.write_value(&mut buffer[cnt..], &call.values[i]);
+                    cnt += r.unwrap();
+                }
             }
-            ParsedStatus::Response => {}
+            ParsedStatus::Response => {
+                assert!(call.values.len() == 1);
+
+                let r = serializer.write_response(&mut buffer[cnt..], &call.values[0]);
+                cnt += r.unwrap();
+            }
             _ => return,
         }
-        for i in 0..call.values.len() {
-            serializer.reset();
-            let r = serializer.write_value(&mut buffer[cnt..], &call.values[i]);
+
+        if !binary_data.is_empty() {
+            serializer.reset();                    
+            let r = serializer.write_data(&mut buffer[cnt..], &call.data);
             cnt += r.unwrap();
         }
+
+        // Parse again to new call
+        let mut call2 = value_tree_builder::ValueTreeBuilder::new();
+
+        tokenizer.reset();
+        let res = tokenizer.parse(&buffer[0..cnt], &mut call2);
+        match res {
+            Ok((expecting_data, _processed)) => {
+                assert!(expecting_data == false, "should not expect data")
+            }
+            Err(_pos) => assert!(res.is_ok(), "result should not error"),
+        }
+
+        if !binary_data.is_empty() {
+            let parsed_data = hex::encode(&call2.data);
+            if binary_data != parsed_data {
+                println!(
+                    "Failed test line:{} - #{} - {} => streamdata {} != {}",
+                    line, order, test_name, binary_data, parsed_data
+                );
+            }
+        }
+
+        // finaly compare result
+        assert_eq!(&call.to_string(), &call2.to_string());
     }
 
     #[test]
@@ -592,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_frpc_serialized_deserialize() {
-        let res = test_file("tests/frpc.tests", false, &test_serialized_deserialize);
+        let res = test_file("tests/frpc.tests", false, &test_serialize_deserialize);
         assert!(res.is_ok());
     }
 
@@ -609,8 +672,8 @@ mod tests {
     }
 
     #[test]
-    fn test_frps_serialized_deserialize() {
-        let res = test_file("tests/frps.tests", true, &test_serialized_deserialize);
+    fn test_frps_serialize_deserialize() {
+        let res = test_file("tests/frps.tests", true, &test_serialize_deserialize);
         assert!(res.is_ok());
     }
 }

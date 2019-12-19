@@ -284,7 +284,7 @@ pub const DATETIME_ID: u8 = 0b00101000;
 pub const CALL_ID: u8 = 0b01101000;
 pub const RESPOSE_ID: u8 = 0b01110000;
 pub const FAULT_RESPOSE_ID: u8 = 0b01111000;
-pub const FRPS_DATA: u8 = 0b00000000; 
+pub const FRPS_DATA_ID: u8 = 0b00000000; 
 
 pub const MAX_STR_LENGTH: usize = 1024 * 1024 * 1024; // 1 GB
 pub const MAX_BIN_LENGTH: usize = 1024 * 1024 * 1024; // 1 GB

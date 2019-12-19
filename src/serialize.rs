@@ -3,10 +3,10 @@ use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
-use std::{i64, u64, u16};
+use std::{i64, u16, u64};
 
-use crate::{DateTimeVer30, Value};
 use crate::constants::*;
+use crate::{DateTimeVer30, Value};
 
 static ZERO: u64 = 0;
 static ALLONES: u64 = !ZERO;
@@ -145,10 +145,9 @@ fn write_datetime_v30(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'st
     // } __attribute__((packed));
 
     dst[1] = (val.time_zone / 60i16 / 15i16).try_into().unwrap();
-    
     LittleEndian::write_u64(&mut dst[2..], val.unix_time);
     // serialize
-    let mut byte: u8 = (val.sec & 0x1f) << 3; 
+    let mut byte: u8 = (val.sec & 0x1f) << 3;
     byte |= val.week_day & 0x07;
     dst[10] = byte;
     let mut byte: u8 = (val.min & 0x3f) << 1;
@@ -160,7 +159,7 @@ fn write_datetime_v30(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'st
     dst[12] = byte;
     let mut byte: u8 = (val.day & 0x1f) >> 4;
     byte |= (val.month & 0x0f) << 1;
-    let year: u16 = if val.year < 1600  {0 } else {val.year - 1600};
+    let year: u16 = if val.year < 1600 { 0 } else { val.year - 1600 };
     byte |= ((year & 0x07) << 5).to_le_bytes()[1];
     dst[13] = byte;
     let byte: u8 = ((year & 0x07f8) >> 3).to_le_bytes()[0];
@@ -169,7 +168,7 @@ fn write_datetime_v30(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'st
     Ok(15)
 }
 
-/** Writes tag and length for string, binary, array and struct types */
+/// Writes `tag` and `length` for string, binary, array and struct types
 fn write_head(frps_type: u8, size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
     let octets = get_octets(size.try_into().unwrap());
 
@@ -182,6 +181,38 @@ fn write_head(frps_type: u8, size: usize, dst: &mut [u8]) -> Result<usize, &'sta
     LittleEndian::write_u64(&mut dst[1..], size as u64);
 
     Ok(octets + /*header*/ 1 + /*first byte*/1)
+}
+
+/// Writes `tag` and `length` for frps data type
+fn write_data_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
+    if size == 0 {
+        dst[0];
+        return Ok(/*header*/ 1);
+    }
+
+    let octets = get_octets(size.try_into().unwrap());
+
+    // data size encoded in octects
+    let octects_mask: u8 = match octets {
+        0 | 1 | 2 => 1,
+        3 | 4 => 2,
+        5 | 6 | 7 | 8 => 4,
+        _ => return Err("data too big"),
+    };
+
+    dst[0] = octects_mask; 
+    
+    // this works only for little-endian systems
+    LittleEndian::write_u64(&mut dst[1..], size as u64);
+    
+    let size_len = match octects_mask {
+        1 => 2,
+        2 => 4,
+        4 => 8,
+        _ => return Err("data too big"),
+    };
+
+    Ok(/*header*/ 1 + size_len)
 }
 
 /** Writes head of struct key */
@@ -226,6 +257,9 @@ enum States<'a> {
     FaultCode,
     FaultMsg,
     FaultMsgData,
+
+    DataHead,
+    Data,
 }
 
 /** Represent either temporary buffer
@@ -310,7 +344,7 @@ impl<'a> Serializer<'a> {
                         if written == dst.len() {
                             return Ok(written); // dst buffer is full
                         }
-                        written += write_null(&mut self.source.buffer).unwrap();
+                        written += write_null(&mut dst[written..]).unwrap();
                         *state = States::StackPop;
                     }
                     Value::Int(x) => {
@@ -526,7 +560,7 @@ impl<'a> Serializer<'a> {
                     }
                     *state = States::Value(&value);
                 }
-                States::Value(_) => return self.write_v(dst, 0),
+                States::Value(_) => return self.write_v(dst, written),
                 _ => return Err("Invalid state"),
             }
         }
@@ -590,6 +624,47 @@ impl<'a> Serializer<'a> {
                         &mut self.source,
                         &msg.as_bytes(),
                     );
+
+                    if !self.source.is_empty() {
+                        return Ok(written);
+                    }
+                    *state = States::StackPop;
+                }
+                States::StackPop => {
+                    self.stack.pop();
+                }
+                _ => return Err("Invalid state"),
+            }
+        }
+        Ok(written)
+    }
+
+    pub fn write_data(&mut self, dst: &mut [u8], src: &[u8]) -> Result<usize, &'static str> {
+        let mut written: usize = 0;
+        while let Some(state) = self.stack.last_mut() {
+            match state {
+                States::Init => {
+                    // Write response header
+                    let cnt = write_data_head(src.len(), &mut self.source.buffer).unwrap();
+                    self.source.prepare(cnt);
+                    *state = States::DataHead;
+                }
+                States::DataHead => {
+                    written += self.source.flush(dst, written);
+                    if !self.source.is_empty() {
+                        return Ok(written);
+                    }
+                    // prepare string value itself
+                    self.source.prepare(src.len());
+                    *state = States::Data;
+                }
+                States::Data => {
+                    written += Serializer::copy_next_chunk(dst, written, &mut self.source, src);
+
+                    if !self.source.is_empty() {
+                        return Ok(written);
+                    }
+
                     *state = States::StackPop;
                 }
                 States::StackPop => {
@@ -648,6 +723,13 @@ mod tests {
 
         let cnt = write_double(1024123.123, &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 9);
+
+        let cnt = write_null(&mut buffer[cnt..]).unwrap();
+        assert_eq!(cnt, 1);
+
+        // let dt = DateTimeVer30 {};
+        // let cnt = write_datetime_v30(&dt, &mut buffer[cnt..]).unwrap();
+        // assert_eq!(cnt, 25);
     }
 
     #[test]

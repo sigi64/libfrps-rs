@@ -216,6 +216,16 @@ impl Tokenizer {
         }
     }
 
+    /// Prepare tokenizer for reuse with new stream
+    pub fn reset(&mut self) {
+        self.stack.clear();
+        self.buffer.reset();
+        self.version_major = 0;
+        self.version_minor = 0;
+        self.context = Context::Init;
+        self.stack.push(States::Init);
+    }
+
     /// Function tokenize `src` and call `cb` for storing Tokens.
     ///
     /// Return Ok (`true` if more data are expected and how many `bytes` was processed) or error description
@@ -352,8 +362,8 @@ impl Tokenizer {
                     *state = States::Value;
                     if self.is_frps {
                         *state = States::DataInit;
-                        self.stack.push(States::Value);                      
-                    }                    
+                        self.stack.push(States::Value);
+                    }
                 }
 
                 States::Fault => {
@@ -448,7 +458,7 @@ impl Tokenizer {
                         DATETIME_ID => {
                             *state = States::DateTime;
                         }
-                        FRPS_DATA => {
+                        FRPS_DATA_ID => {
                             if !self.is_frps {
                                 cb.error("unknown type");
                                 return Err(src.pos);
@@ -465,7 +475,12 @@ impl Tokenizer {
                                 }
                             };
 
-                            *state = States::DataLen { octects };
+                            // Zero octects mean no data 
+                            if octects == 0 {
+                                *state = States::Value;
+                            } else {
+                                *state = States::DataLen { octects };
+                            }
                         }
                         FAULT_RESPOSE_ID => {
                             if !self.is_frps {
@@ -1085,7 +1100,7 @@ impl Tokenizer {
                     }
 
                     match self.buffer.data[0] & TYPE_MASK {
-                        FRPS_DATA => {
+                        FRPS_DATA_ID => {
                             let octects: usize = match self.buffer.data[0] & OCTET_CNT_MASK {
                                 0 => 0,
                                 1 => 2,
@@ -1269,7 +1284,7 @@ fn read_i64(s: &[u8]) -> i64 {
 */
 
 fn zigzag_decode(s: &[u8]) -> i64 {
-    let unsigned_shr = |n : i64| {
+    let unsigned_shr = |n: i64| {
         let n = u64::from_le_bytes(n.to_le_bytes()) >> 1;
         i64::from_le_bytes(n.to_le_bytes())
     };
