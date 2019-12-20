@@ -1,6 +1,6 @@
-use crate::constants::*;
+use crate::common::*;
 use crate::tokenizer::*;
-use crate::{DateTimeVer30, Value};
+use crate::Value;
 use std::collections::HashMap;
 use std::{fmt, str};
 
@@ -203,11 +203,11 @@ impl Callback for ValueTreeBuilder {
         return true;
     }
 
-    fn datetime(&mut self, v: &DateTimeVer30) -> bool {
+    fn datetime(&mut self, v: i64) -> bool {
         if let Some(last) = self.stack.last_mut() {
-            return ValueTreeBuilder::append_to_last(last, Value::DateTime(*v));
+            return ValueTreeBuilder::append_to_last(last, Value::DateTime(v));
         }
-        self.values.push(Value::DateTime(*v));
+        self.values.push(Value::DateTime(v));
         return true;
     }
 

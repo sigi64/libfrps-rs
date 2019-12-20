@@ -3,10 +3,10 @@ use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
-use std::{i64, u16, u64};
+use std::{i64, u64};
 
-use crate::constants::*;
-use crate::{DateTimeVer30, Value};
+use crate::common::*;
+use crate::Value;
 
 static ZERO: u64 = 0;
 static ALLONES: u64 = !ZERO;
@@ -124,8 +124,52 @@ fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &'static str> {
     Ok(9)
 }
 
+// impl From<DateTime<Utc>> for DateTimeVer30 {
+//     fn from(dt: DateTime<Utc>) -> Self {
+//         DateTimeVer30 {
+//             time_zone: 0,
+//             unix_time: dt.timestamp(),
+//             week_day: match dt.weekday() {
+//                 Weekday::Mon => 1,
+//                 Weekday::Tue => 2,
+//                 Weekday::Wed => 3,
+//                 Weekday::Thu => 4,
+//                 Weekday::Fri => 5,
+//                 Weekday::Sat => 6,
+//                 Weekday::Sun => 0,
+//             },
+//             sec: dt.time().second() as u8,
+//             min: dt.time().minute() as u8,
+//             hour: dt.time().hour() as u8,
+//             day: dt.day() as u8,
+//             month: dt.month() as u8,
+//             year: dt.year() as u16,
+//         }
+//     }
+// }
+
+// impl Into<DateTime<Utc>> for DateTimeVer30 {
+//     fn into(self) -> DateTime<Utc> {
+//         // -1 means unrepresentable time according FRPC protocol specification
+//         if self.unix_time != -1 {
+//             let naive_datetime = NaiveDateTime::from_timestamp(self.unix_time as i64, 0);
+//             return DateTime::<Utc>::from_utc(naive_datetime, Utc);
+//         } else {   
+//             let dt = FixedOffset::east((self.time_zone as i32) * 60 * 15)
+//                 .ymd(
+//                     1600 + (self.year as i32),
+//                     self.month as u32,
+//                     self.day as u32,
+//                 )
+//                 .and_hms(self.hour as u32, self.min as u32, self.sec as u32);
+//             return dt.into();
+//         }
+//     }
+// }
+
+
 /** Writes tag and datetime value */
-fn write_datetime_v30(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'static str> {
+fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str>{
     if dst.len() < 15 {
         return Err("not enought space");
     }
@@ -134,7 +178,7 @@ fn write_datetime_v30(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'st
 
     // struct DateTimeFormat3_t {
     //     uint8_t timeZone : 8;
-    //     uint64_t unixTime : 64;
+    //     int64_t unixTime : 64;
     //     uint8_t weekDay : 3;
     //     uint8_t sec : 6;
     //     uint8_t minute : 6;
@@ -144,22 +188,24 @@ fn write_datetime_v30(val: &DateTimeVer30, dst: &mut [u8]) -> Result<usize, &'st
     //     uint16_t year : 11;
     // } __attribute__((packed));
 
-    dst[1] = (val.time_zone / 60i16 / 15i16).try_into().unwrap();
-    LittleEndian::write_u64(&mut dst[2..], val.unix_time);
-    // serialize
-    let mut byte: u8 = (val.sec & 0x1f) << 3;
-    byte |= val.week_day & 0x07;
+    let dt = time::PrimitiveDateTime::from_unix_timestamp(*val);
+    
+    dst[1] = 0; // we know we are utc :-)
+    LittleEndian::write_i64(&mut dst[2..], *val);
+    
+    let mut byte: u8 = (dt.second() & 0x1f) << 3;
+    byte |= dt.weekday().number_from_sunday() & 0x07;
     dst[10] = byte;
-    let mut byte: u8 = (val.min & 0x3f) << 1;
-    byte |= (val.sec & 0x20) >> 5;
-    byte |= (val.hour & 0x01) << 7;
+    let mut byte: u8 = (dt.minute() & 0x3f) << 1;
+    byte |= (dt.second() & 0x20) >> 5;
+    byte |= (dt.hour() & 0x01) << 7;
     dst[11] = byte;
-    let mut byte: u8 = (val.hour & 0x1e) >> 1;
-    byte |= (val.day & 0x0f) << 4;
+    let mut byte: u8 = (dt.hour() & 0x1e) >> 1;
+    byte |= (dt.day() & 0x0f) << 4;
     dst[12] = byte;
-    let mut byte: u8 = (val.day & 0x1f) >> 4;
-    byte |= (val.month & 0x0f) << 1;
-    let year: u16 = if val.year < 1600 { 0 } else { val.year - 1600 };
+    let mut byte: u8 = (dt.day() & 0x1f) >> 4;
+    byte |= (dt.month() & 0x0f) << 1;
+    let year: u16 = if dt.year() < 1600 { 0 } else { dt.year() as u16 - 1600 };
     byte |= ((year & 0x07) << 5).to_le_bytes()[1];
     dst[13] = byte;
     let byte: u8 = ((year & 0x07f8) >> 3).to_le_bytes()[0];
@@ -200,11 +246,11 @@ fn write_data_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
         _ => return Err("data too big"),
     };
 
-    dst[0] = octects_mask; 
-    
+    dst[0] = octects_mask;
+
     // this works only for little-endian systems
     LittleEndian::write_u64(&mut dst[1..], size as u64);
-    
+
     let size_len = match octects_mask {
         1 => 2,
         2 => 4,
@@ -357,7 +403,7 @@ impl<'a> Serializer<'a> {
                         self.source.prepare(cnt);
                         *state = States::FlushBuffer;
                     }
-                    Value::DateTime(x) => {
+                    Value::DateTime(x) => {                        
                         let cnt = write_datetime_v30(x, &mut self.source.buffer).unwrap();
                         self.source.prepare(cnt);
                         *state = States::FlushBuffer;

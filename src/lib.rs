@@ -1,4 +1,4 @@
-mod constants;
+mod common;
 mod serialize;
 mod tokenizer;
 mod value_tree_builder;
@@ -7,48 +7,15 @@ pub use serialize::Serializer;
 pub use tokenizer::Tokenizer;
 pub use value_tree_builder::{ParsedStatus, ValueTreeBuilder};
 
-use chrono::prelude::{DateTime, NaiveDateTime, Utc, Local};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-
-// FRPC version 3.0 format (unix_time is 64 bit)
-#[derive(Copy, Clone, Debug)]
-pub struct DateTimeVer30 {
-    pub time_zone: i16, // as difference between UTC and localtime in seconds
-    pub unix_time: u64,
-    pub week_day: u8,
-    pub sec: u8,
-    pub min: u8,
-    pub hour: u8,
-    pub day: u8,
-    pub month: u8,
-    pub year: u16,
-}
-
-// impl DateTimeVer30 {
-//     pub fn now() -> DateTimeVer30 {
-
-//         let dt =  Local::now();
-//         DateTimeVer30 {
-//             time_zone: dt.timezone().offset_from_ as i16,
-//             unix_time: dt.timestamp(),
-//             week_day: dt.weekday(),
-//             sec: dt.second(),
-//             min: dt.minute(),
-//             hour: dt.hour(),
-//             day: dt.day(),
-//             month: dt.month(),
-//             year: dt.year(),
-//         }
-//     }
-// }
 
 #[derive(Debug)]
 pub enum Value {
     Int(i64),
     Str(String),
     Null,
-    DateTime(DateTimeVer30),
+    DateTime(i64), // unix timestamp (UTC) can be negative :-)
     Struct(HashMap<String, Value>),
     Array(Vec<Value>),
     Double(f64),
@@ -77,13 +44,9 @@ impl Value {
                 }
             }
             Value::DateTime(v) => {
-                let naive_datetime = NaiveDateTime::from_timestamp(v.unix_time as i64, 0);
-
-                DateTime::<Utc>::from_utc(naive_datetime, Utc)
-                    .format("%Y-%m-%d %H:%M:%S")
-                    .to_string()
-                // v.unix_time.to_string()
-            }
+                time::PrimitiveDateTime::from_unix_timestamp(*v)
+                    .format("%Y-%m-%d %H:%M:%S").to_string()
+            },
             Value::Str(v) => "\"".to_owned() + v + &"\"".to_owned(),
             Value::Binary(v) => "b\"".to_owned() + &hex::encode(v) + &"\"".to_owned(),
             Value::Array(v) => {
@@ -610,7 +573,7 @@ mod tests {
         }
 
         if !binary_data.is_empty() {
-            serializer.reset();                    
+            serializer.reset();
             let r = serializer.write_data(&mut buffer[cnt..], &call.data);
             cnt += r.unwrap();
         }

@@ -1,5 +1,4 @@
-use crate::constants::*;
-use crate::DateTimeVer30;
+use crate::common::*;
 use byteorder::{ByteOrder, LittleEndian};
 use std::cmp;
 use std::fmt::Debug;
@@ -66,7 +65,7 @@ pub trait Callback {
     fn integer(&mut self, v: i64) -> bool;
     fn boolean(&mut self, v: bool) -> bool;
     fn double_number(&mut self, v: f64) -> bool;
-    fn datetime(&mut self, v: &DateTimeVer30) -> bool;
+    fn datetime(&mut self, v: i64) -> bool;
     /** Called when we reached begin of string with len */
     fn string_begin(&mut self, len: usize) -> bool;
     /* send data chunk 'v' with size smaller or equal of total length in 'len'*/
@@ -475,7 +474,7 @@ impl Tokenizer {
                                 }
                             };
 
-                            // Zero octects mean no data 
+                            // Zero octects mean no data
                             if octects == 0 {
                                 *state = States::Value;
                             } else {
@@ -978,7 +977,7 @@ impl Tokenizer {
                     let val = if self.version_major == 3 {
                         // struct DateTimeFormat3_t {
                         //     uint8_t timeZone : 8;
-                        //     uint64_t unixTime : 64;
+                        //     int64_t unixTime : 64;
                         //     uint8_t weekDay : 3;
                         //     uint8_t sec : 6;
                         //     uint8_t minute : 6;
@@ -988,8 +987,8 @@ impl Tokenizer {
                         //     uint16_t year : 11;
                         // } __attribute__((packed));
                         let time_zone = (self.buffer.data[0] as i16) * 15 * 60;
-                        let unix_time = LittleEndian::read_u64(&self.buffer.data[1..]);
-                        let week_day: u8 = self.buffer.data[9] & 0x07;
+                        let unix_time = LittleEndian::read_i64(&self.buffer.data[1..]);
+                        let _week_day: u8 = self.buffer.data[9] & 0x07;
                         let sec: u8 = ((self.buffer.data[9] & 0xf8) >> 3)
                             | ((self.buffer.data[11] & 0x01) << 5);
                         let min: u8 = (self.buffer.data[10] & 0x7e) >> 1;
@@ -1001,23 +1000,28 @@ impl Tokenizer {
                         let year = (((self.buffer.data[12] as u16) & 0xe0) >> 5)
                             | ((self.buffer.data[13] as u16) << 3) + 1600;
 
-                        DateTimeVer30 {
-                            time_zone,
-                            unix_time,
-                            week_day,
-                            sec,
-                            min,
-                            hour,
-                            day,
-                            month,
-                            year,
+                        if unix_time != -1 {
+                            unix_time
+                        } else {
+                            let r = time::Date::try_from_ymd(year as i32, month, day);
+                            if r.is_err() {
+                                return Err(src.pos);
+                            }
+                            let r = r.unwrap().try_with_hms(hour, min, sec);
+                            if r.is_err() {
+                                return Err(src.pos);
+                            }
+                            let r = r
+                                .unwrap()
+                                .using_offset(time::UtcOffset::seconds(time_zone as i32));
+                            r.timestamp()
                         }
                     } else {
                         // Verion 2.1 or 1.0
 
                         // struct DateTimeFormat1_t {
                         //     uint8_t timeZone : 8;
-                        //     uint32_t unixTime : 32;
+                        //     int32_t unixTime : 32;
                         //     uint8_t weekDay : 3;
                         //     uint8_t sec : 6;
                         //     uint8_t minute : 6;
@@ -1028,8 +1032,8 @@ impl Tokenizer {
                         // } __attribute__((packed));
 
                         let time_zone = (self.buffer.data[0] as i16) * 15 * 60;
-                        let unix_time = LittleEndian::read_u32(&self.buffer.data[1..]) as u64;
-                        let week_day = self.buffer.data[5] & 0x07;
+                        let unix_time = LittleEndian::read_i32(&self.buffer.data[1..]) as i64;
+                        let _week_day = self.buffer.data[5] & 0x07;
                         let sec = ((self.buffer.data[5] & 0xf8) >> 3)
                             | ((self.buffer.data[6] & 0x01) << 5);
                         let min = (self.buffer.data[6] & 0x7e) >> 1;
@@ -1041,20 +1045,25 @@ impl Tokenizer {
                         let year = (((self.buffer.data[8] as u16) & 0xe0) >> 5)
                             | ((self.buffer.data[9] as u16) << 3) + 1600;
 
-                        DateTimeVer30 {
-                            time_zone,
-                            unix_time,
-                            week_day,
-                            sec,
-                            min,
-                            hour,
-                            day,
-                            month,
-                            year,
+                        if unix_time != -1 {
+                            unix_time
+                        } else {
+                            let r = time::Date::try_from_ymd(year as i32, month, day);
+                            if r.is_err() {
+                                return Err(src.pos);
+                            }
+                            let r = r.unwrap().try_with_hms(hour, min, sec);
+                            if r.is_err() {
+                                return Err(src.pos);
+                            }
+                            let r = r
+                                .unwrap()
+                                .using_offset(time::UtcOffset::seconds(time_zone as i32));
+                            r.timestamp()
                         }
                     };
 
-                    let run = cb.datetime(&val);
+                    let run = cb.datetime(val);
                     if !run {
                         //dbg!(src.pos, &src.src[src.pos..], cb);
                         cb.error("cb::datetime in Datetime failed");
