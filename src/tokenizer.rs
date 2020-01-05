@@ -206,7 +206,8 @@ impl Tokenizer {
         }
     }
 
-    /// return `true` when tokenizer expect data to tokenize to reach valid state
+    /// return `true` when tokenizer expect data to tokenize to reach 
+    /// valid state
     fn need_data(&self) -> bool {
         match &self.context {
             Context::Fault { args: arg } => *arg < (3 as usize),
@@ -227,7 +228,8 @@ impl Tokenizer {
 
     /// Function tokenize `src` and call `cb` for storing Tokens.
     ///
-    /// Return Ok (`true` if more data are expected and how many `bytes` was processed) or error description
+    /// Return Ok (`true` if more data are expected and how many `bytes` 
+    /// was processed) or error description
     pub fn parse<T: Callback + Debug>(
         &mut self,
         src: &[u8],

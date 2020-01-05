@@ -154,7 +154,7 @@ fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &'static str> {
 //         if self.unix_time != -1 {
 //             let naive_datetime = NaiveDateTime::from_timestamp(self.unix_time as i64, 0);
 //             return DateTime::<Utc>::from_utc(naive_datetime, Utc);
-//         } else {   
+//         } else {
 //             let dt = FixedOffset::east((self.time_zone as i32) * 60 * 15)
 //                 .ymd(
 //                     1600 + (self.year as i32),
@@ -167,9 +167,8 @@ fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &'static str> {
 //     }
 // }
 
-
 /** Writes tag and datetime value */
-fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str>{
+fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 15 {
         return Err("not enought space");
     }
@@ -189,10 +188,10 @@ fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str>{
     // } __attribute__((packed));
 
     let dt = time::PrimitiveDateTime::from_unix_timestamp(*val);
-    
+
     dst[1] = 0; // we know we are utc :-)
     LittleEndian::write_i64(&mut dst[2..], *val);
-    
+
     let mut byte: u8 = (dt.second() & 0x1f) << 3;
     byte |= dt.weekday().number_from_sunday() & 0x07;
     dst[10] = byte;
@@ -205,7 +204,11 @@ fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str>{
     dst[12] = byte;
     let mut byte: u8 = (dt.day() & 0x1f) >> 4;
     byte |= (dt.month() & 0x0f) << 1;
-    let year: u16 = if dt.year() < 1600 { 0 } else { dt.year() as u16 - 1600 };
+    let year: u16 = if dt.year() < 1600 {
+        0
+    } else {
+        dt.year() as u16 - 1600
+    };
     byte |= ((year & 0x07) << 5).to_le_bytes()[1];
     dst[13] = byte;
     let byte: u8 = ((year & 0x07f8) >> 3).to_le_bytes()[0];
@@ -403,7 +406,7 @@ impl<'a> Serializer<'a> {
                         self.source.prepare(cnt);
                         *state = States::FlushBuffer;
                     }
-                    Value::DateTime(x) => {                        
+                    Value::DateTime(x) => {
                         let cnt = write_datetime_v30(x, &mut self.source.buffer).unwrap();
                         self.source.prepare(cnt);
                         *state = States::FlushBuffer;
@@ -745,37 +748,38 @@ impl<'a> Serializer<'a> {
 mod tests {
     use super::*;
 
-    fn analyze_slice(slice: &[u8]) {
-        println!("first element of the slice: {}", slice[0]);
-        println!("the slice has {} elements", slice.len());
-    }
-
     #[test]
     fn wire_format() {
         let mut buffer: [u8; 256] = [0; 256];
 
+        // magic
         let cnt = write_magic(1u8, &mut buffer).unwrap();
-
-        analyze_slice(&buffer[0..5]);
         assert_eq!(cnt, 5);
 
+        // bool
         let cnt = write_bool(false, &mut buffer[cnt..]).unwrap();
-
-        analyze_slice(&buffer[0..6]);
         assert_eq!(cnt, 1);
-
+        
+        // int
         let cnt = write_int(1024123123, &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 5);
 
+        // double
         let cnt = write_double(1024123.123, &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 9);
 
+        // null
         let cnt = write_null(&mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 1);
 
-        // let dt = DateTimeVer30 {};
-        // let cnt = write_datetime_v30(&dt, &mut buffer[cnt..]).unwrap();
-        // assert_eq!(cnt, 25);
+        // Datetime
+        let now = time::PrimitiveDateTime::now();
+        let cnt = write_datetime_v30(&now.timestamp(), &mut buffer[cnt..]).unwrap();
+        assert_eq!(cnt, 15);
+
+        // write time before unix epoch
+        let cnt = write_datetime_v30(&-now.timestamp(), &mut buffer[cnt..]).unwrap();
+        assert_eq!(cnt, 15);
     }
 
     #[test]
@@ -783,37 +787,55 @@ mod tests {
         let mut serializer = Serializer::new();
         let mut buffer: [u8; 256] = [0; 256];
 
-        let mut written = 0;
+        // call
+        let mut _written = 0;
         let cnt = serializer.write_call(&mut buffer, "server.stat");
         assert_eq!(cnt.is_ok(), true);
-        written += cnt.unwrap();
+        _written += cnt.unwrap();
 
+        // Int
         serializer.reset();
         let val = Value::Int(1224);
-        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        let cnt = serializer.write_value(&mut buffer[_written..], &val);
         assert_eq!(cnt.is_ok(), true);
-        written += cnt.unwrap();
+        _written += cnt.unwrap();
 
+        // double
         serializer.reset();
         let val = Value::Double(12.24);
-        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        let cnt = serializer.write_value(&mut buffer[_written..], &val);
         assert_eq!(cnt.is_ok(), true);
-        written += cnt.unwrap();
+        _written += cnt.unwrap();
 
+        // String
         serializer.reset();
-        let val = Value::Str(String::from("Ahoj tady string"));
-        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        let val = Value::Str("Ahoj tady string".into());
+        let cnt = serializer.write_value(&mut buffer[_written..], &val);
         assert_eq!(cnt.is_ok(), true);
-        written += cnt.unwrap();
+        _written += cnt.unwrap();
 
+        // Array with int and string
         serializer.reset();
         let val = Value::Array(vec![
             Value::Int(1),
-            Value::Str(String::from("Ahoj tady string")),
+            Value::Str("Ahoj tady string".into()),
         ]);
-        let cnt = serializer.write_value(&mut buffer[written..], &val);
+        let cnt = serializer.write_value(&mut buffer[_written..], &val);
         assert_eq!(cnt.is_ok(), true);
-        written += cnt.unwrap();
-        println!("Serialized data len: {}", written);
+        _written += cnt.unwrap();
+        // println!("Serialized data len: {}", written);
+
+        // struct
+        serializer.reset();
+        let mut val = HashMap::new();
+        val.insert("key_1".into(), Value::Int(1));
+        val.insert("key_2".into(), Value::Str("ahoj".into()));
+
+        let val = Value::Struct(val);
+
+        let cnt = serializer.write_value(&mut buffer[_written..], &val);
+        assert_eq!(cnt.is_ok(), true);
+        _written += cnt.unwrap();
+        //println!("Serialized data len: {}", written);
     }
 }
