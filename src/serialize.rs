@@ -759,7 +759,7 @@ mod tests {
         // bool
         let cnt = write_bool(false, &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 1);
-        
+
         // int
         let cnt = write_int(1024123123, &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 5);
@@ -816,10 +816,7 @@ mod tests {
 
         // Array with int and string
         serializer.reset();
-        let val = Value::Array(vec![
-            Value::Int(1),
-            Value::Str("Ahoj tady string".into()),
-        ]);
+        let val = Value::Array(vec![Value::Int(1), Value::Str("Ahoj tady string".into())]);
         let cnt = serializer.write_value(&mut buffer[_written..], &val);
         assert_eq!(cnt.is_ok(), true);
         _written += cnt.unwrap();
