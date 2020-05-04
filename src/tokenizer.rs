@@ -1083,9 +1083,8 @@ impl Tokenizer {
                     //  again  when stack is empty
                     // Fault put to 2 values to stack so we dont have to care
                     if self.stack.is_empty() {
-                        match self.context {
-                            Context::Call { args: _ } => self.stack.push(States::Value),
-                            _ => {}
+                        if let Context::Call { args } = self.context {
+                            self.stack.push(States::Value)
                         }
                     }
                 }

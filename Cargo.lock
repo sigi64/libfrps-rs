@@ -67,6 +67,7 @@ dependencies = [
  "byteorder",
  "enum_extract",
  "hex",
+ "log",
  "time",
 ]
 

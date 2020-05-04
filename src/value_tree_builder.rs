@@ -222,7 +222,7 @@ impl Callback for ValueTreeBuilder {
 
     fn string_data(&mut self, v: &[u8], _len: usize) -> bool {
         // empty string is valid too
-        if v.len() == 0 {
+        if v.is_empty() {
             return true;
         }
 
@@ -248,7 +248,7 @@ impl Callback for ValueTreeBuilder {
 
     fn binary_data(&mut self, v: &[u8], _len: usize) -> bool {
         // empty binary is valid too
-        if v.len() == 0 {
+        if v.is_empty() {
             return true;
         }
         if let Some(last) = self.stack.last_mut() {

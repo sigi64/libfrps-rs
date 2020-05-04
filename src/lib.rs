@@ -43,9 +43,9 @@ impl Value {
                     "false".to_owned()
                 }
             }
-            Value::DateTime(v) => time::PrimitiveDateTime::from_unix_timestamp(*v)
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string(),
+            Value::DateTime(v) => {
+                time::PrimitiveDateTime::from_unix_timestamp(*v).format("%Y-%m-%d %H:%M:%S")
+            }
             Value::Str(v) => "\"".to_owned() + v + &"\"".to_owned(),
             Value::Binary(v) => "b\"".to_owned() + &hex::encode(v) + &"\"".to_owned(),
             Value::Array(v) => {
@@ -77,9 +77,9 @@ impl Value {
                             cnt += 1;
 
                             if cnt < total {
-                                k.to_string() + ": " + &Value::to_string(&x) + ", "
+                                (*k).to_string() + ": " + &Value::to_string(&x) + ", "
                             } else {
-                                k.to_string() + ": " + &Value::to_string(&x)
+                                (*k).to_string() + ": " + &Value::to_string(&x)
                             }
                         })
                         .collect::<String>()
@@ -94,7 +94,6 @@ mod tests {
     use super::*;
     use enum_extract::let_extract;
 
-    
     #[test]
     fn tokenize() {
         // serialized frps data
