@@ -44,7 +44,8 @@ impl Value {
                 }
             }
             Value::DateTime(v) => {
-                time::PrimitiveDateTime::from_unix_timestamp(*v).format("%Y-%m-%d %H:%M:%S")
+                // time::PrimitiveDateTime::from_unix_timestamp(*v).format("%Y-%m-%d %H:%M:%S")
+                time::OffsetDateTime::from_unix_timestamp(*v).format("%Y-%m-%d %H:%M:%S")
             }
             Value::Str(v) => "\"".to_owned() + v + &"\"".to_owned(),
             Value::Binary(v) => "b\"".to_owned() + &hex::encode(v) + &"\"".to_owned(),

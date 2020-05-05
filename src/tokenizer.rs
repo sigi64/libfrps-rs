@@ -1013,10 +1013,9 @@ impl Tokenizer {
                             if r.is_err() {
                                 return Err(src.pos);
                             }
-                            let r = r
-                                .unwrap()
-                                .using_offset(time::UtcOffset::seconds(time_zone as i32));
-                            r.timestamp()
+                            let r = r.unwrap();
+                            r.assume_utc().to_offset(time::UtcOffset::seconds(time_zone as i32));
+                            r.assume_utc().timestamp()
                         }
                     } else {
                         // Verion 2.1 or 1.0
@@ -1058,10 +1057,9 @@ impl Tokenizer {
                             if r.is_err() {
                                 return Err(src.pos);
                             }
-                            let r = r
-                                .unwrap()
-                                .using_offset(time::UtcOffset::seconds(time_zone as i32));
-                            r.timestamp()
+                            let r = r.unwrap();
+                            r.assume_utc().to_offset(time::UtcOffset::seconds(time_zone as i32));
+                            r.assume_utc().timestamp()
                         }
                     };
 
@@ -1083,7 +1081,7 @@ impl Tokenizer {
                     //  again  when stack is empty
                     // Fault put to 2 values to stack so we dont have to care
                     if self.stack.is_empty() {
-                        if let Context::Call { args } = self.context {
+                        if let Context::Call { args:_ } = self.context {
                             self.stack.push(States::Value)
                         }
                     }

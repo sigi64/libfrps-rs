@@ -187,7 +187,8 @@ fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str> 
     //     uint16_t year : 11;
     // } __attribute__((packed));
 
-    let dt = time::PrimitiveDateTime::from_unix_timestamp(*val);
+    //let dt = time::PrimitiveDateTime::from_unix_timestamp(*val);
+    let dt = time::OffsetDateTime::from_unix_timestamp(*val);
 
     dst[1] = 0; // we know we are utc :-)
     LittleEndian::write_i64(&mut dst[2..], *val);
@@ -773,7 +774,7 @@ mod tests {
         assert_eq!(cnt, 1);
 
         // Datetime
-        let now = time::PrimitiveDateTime::now();
+        let now = time::OffsetDateTime::now();
         let cnt = write_datetime_v30(&now.timestamp(), &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 15);
 
