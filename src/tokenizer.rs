@@ -92,18 +92,18 @@ struct SourcePtr<'a> {
 
 impl<'a> SourcePtr<'a> {
     fn new(src: &'a [u8]) -> SourcePtr<'a> {
-        SourcePtr { pos: 0, src: src }
+        SourcePtr { pos: 0, src }
     }
 
     /// return size of unconsumed data
     fn available(&self) -> usize {
-        return self.src.len() - self.pos;
+        self.src.len() - self.pos
     }
 
     /// return slice for unconsumed part of data with `cnt` length
     fn data(&self, cnt: usize) -> &[u8] {
         assert!(self.pos + cnt <= self.src.len());
-        return &self.src[self.pos..self.pos + cnt];
+        &self.src[self.pos..self.pos + cnt]
     }
 
     /// move ptr for unconsumed part of data
@@ -114,11 +114,11 @@ impl<'a> SourcePtr<'a> {
     /// return number of bytes consumed.
     fn consumed(&self) -> usize {
         //assert_eq!(self.pos, self.src.len());
-        return self.pos;
+        self.pos
     }
 
     fn is_all_consumed(&self) -> bool {
-        return self.pos == self.src.len();
+        self.pos == self.src.len()
     }
 }
 
@@ -157,7 +157,7 @@ impl Buffer {
         }
 
         // do we have all data ?
-        return need == self.cnt;
+        need == self.cnt
     }
 }
 
@@ -230,6 +230,7 @@ impl Tokenizer {
     ///
     /// Return Ok (`true` if more data are expected and how many `bytes`
     /// was processed) or error description
+    #[allow(clippy::cognitive_complexity)]
     pub fn parse<T: Callback + Debug>(
         &mut self,
         src: &[u8],
@@ -258,6 +259,7 @@ impl Tokenizer {
                     self.version_minor = self.buffer.data[3];
 
                     // We support versions: 3.0, 2.1, 2.0, 1.0
+                    #[allow(clippy::nonminimal_bool)]
                     if !(((self.version_major == 3) && (self.version_minor == 0))
                         || ((self.version_major == 2) && (self.version_minor == 1))
                         || ((self.version_major == 2) && (self.version_minor == 0))
@@ -321,7 +323,7 @@ impl Tokenizer {
                     }
 
                     *state = States::CallName {
-                        length: length,
+                        length,
                         processed: 0,
                     };
                     self.buffer.reset();
@@ -501,9 +503,8 @@ impl Tokenizer {
                     self.buffer.reset();
 
                     // Check if we are processing arguments for call and
-                    match &mut self.context {
-                        Context::Call { args: arg } => *arg += 1,
-                        _ => {}
+                    if let Context::Call { args: arg } = &mut self.context { 
+                        *arg += 1 
                     }
                 }
 
@@ -999,8 +1000,8 @@ impl Tokenizer {
                         let day: u8 = ((self.buffer.data[11] & 0xf0) >> 4)
                             | ((self.buffer.data[12] & 0x01) << 4);
                         let month: u8 = (self.buffer.data[12] & 0x1e) >> 1;
-                        let year = (((self.buffer.data[12] as u16) & 0xe0) >> 5)
-                            | ((self.buffer.data[13] as u16) << 3) + 1600;
+                        let year = ((((self.buffer.data[12] as u16) & 0xe0) >> 5)
+                            | ((self.buffer.data[13] as u16) << 3)) + 1600;
 
                         if unix_time != -1 {
                             unix_time
@@ -1043,8 +1044,8 @@ impl Tokenizer {
                         let day = ((self.buffer.data[7] & 0xf0) >> 4)
                             | ((self.buffer.data[9] & 0x01) << 4);
                         let month = (self.buffer.data[8] & 0x1e) >> 1;
-                        let year = (((self.buffer.data[8] as u16) & 0xe0) >> 5)
-                            | ((self.buffer.data[9] as u16) << 3) + 1600;
+                        let year = ((((self.buffer.data[8] as u16) & 0xe0) >> 5)
+                            | ((self.buffer.data[9] as u16) << 3)) + 1600;
 
                         if unix_time != -1 {
                             unix_time
@@ -1185,7 +1186,7 @@ impl Tokenizer {
         //     dbg!(src.pos, &src.src[src.pos..], cb);
         //     assert!(src.is_all_consumed());
         // }
-        return Ok((false, src.consumed()));
+        Ok((false, src.consumed()))
     }
 }
 
@@ -1199,7 +1200,7 @@ fn read_i64(s: &[u8]) -> i64 {
         let d = &mut tmp[0..cnt];
         d.copy_from_slice(s);
     }
-    return i64::from_le_bytes(tmp);
+    i64::from_le_bytes(tmp)
 }
 
 /*
@@ -1298,5 +1299,5 @@ fn zigzag_decode(s: &[u8]) -> i64 {
     };
 
     let s = read_i64(s);
-    return unsigned_shr(s) ^ (-(s & 1));
+    unsigned_shr(s) ^ (-(s & 1))
 }

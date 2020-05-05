@@ -175,23 +175,23 @@ Value 	Encoded Value
 */
 
 // Binary format type's ids
-pub const TYPE_MASK: u8 = 0b11111000;
-pub const OCTET_CNT_MASK: u8 = 0b00000111;
-pub const U_VINT_ID: u8 = 0b00111000; // ver 2.1
-pub const VINT_ID: u8 = 0b01000000; // ver 2.1
-pub const STRING_ID: u8 = 0b00100000;
-pub const BIN_ID: u8 = 0b00110000;
-pub const NULL_ID: u8 = 0b01100000;
-pub const STRUCT_ID: u8 = 0b01010000;
-pub const ARRAY_ID: u8 = 0b01011000;
-pub const INT_ID: u8 = 0b00001000; // 1.0 & 3.0
-pub const BOOL_ID: u8 = 0b00010000;
-pub const DOUBLE_ID: u8 = 0b00011000;
-pub const DATETIME_ID: u8 = 0b00101000;
-pub const CALL_ID: u8 = 0b01101000;
-pub const RESPOSE_ID: u8 = 0b01110000;
-pub const FAULT_RESPOSE_ID: u8 = 0b01111000;
-pub const FRPS_DATA_ID: u8 = 0b00000000;
+pub const TYPE_MASK: u8 = 0b1111_1000;
+pub const OCTET_CNT_MASK: u8 = 0b0000_0111;
+pub const U_VINT_ID: u8 = 0b0011_1000; // ver 2.1
+pub const VINT_ID: u8 = 0b0100_0000; // ver 2.1
+pub const STRING_ID: u8 = 0b0010_0000;
+pub const BIN_ID: u8 = 0b0011_0000;
+pub const NULL_ID: u8 = 0b0110_0000;
+pub const STRUCT_ID: u8 = 0b0101_0000;
+pub const ARRAY_ID: u8 = 0b0101_1000;
+pub const INT_ID: u8 = 0b0000_1000; // 1.0 & 3.0
+pub const BOOL_ID: u8 = 0b0001_0000;
+pub const DOUBLE_ID: u8 = 0b0001_1000;
+pub const DATETIME_ID: u8 = 0b0010_1000;
+pub const CALL_ID: u8 = 0b0110_1000;
+pub const RESPOSE_ID: u8 = 0b0111_0000;
+pub const FAULT_RESPOSE_ID: u8 = 0b0111_1000;
+pub const FRPS_DATA_ID: u8 = 0b0000_0000;
 
 pub const MAX_STR_LENGTH: usize = 1024 * 1024 * 1024; // 1 GB
 pub const MAX_BIN_LENGTH: usize = 1024 * 1024 * 1024; // 1 GB

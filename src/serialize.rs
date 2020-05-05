@@ -40,7 +40,7 @@ fn get_octets(number: u64) -> usize {
     if (number & INT56_MASK) == 0 {
         return 6;
     }
-    return 7;
+    7
 }
 
 /** Encodes signed integer as unsigned,
@@ -63,7 +63,7 @@ fn zigzag_encode(n: i64) -> u64 {
     // let tmp = (n << 1) ^ (n >> 63);
 
     let tmp = n.overflowing_shl(1).0 ^ n.overflowing_shr(63).0;
-    return u64::from_le_bytes(tmp.to_le_bytes());
+    u64::from_le_bytes(tmp.to_le_bytes())
 }
 
 /** Writes protocol header and message type
@@ -83,7 +83,7 @@ fn write_magic(msg_type: u8, dst: &mut [u8]) -> Result<usize, &'static str> {
 
 /** Writes tag and bool value */
 fn write_bool(val: bool, dst: &mut [u8]) -> Result<usize, &'static str> {
-    if dst.len() < 1 {
+    if dst.is_empty() {
         return Err("not enought space");
     }
 
@@ -93,7 +93,7 @@ fn write_bool(val: bool, dst: &mut [u8]) -> Result<usize, &'static str> {
 
 /** Writes tag and null value */
 fn write_null(dst: &mut [u8]) -> Result<usize, &'static str> {
-    if dst.len() < 1 {
+    if dst.is_empty() {
         return Err("not enought space");
     }
     dst[0] = NULL_ID;
@@ -168,7 +168,7 @@ fn write_double(val: f64, dst: &mut [u8]) -> Result<usize, &'static str> {
 // }
 
 /** Writes tag and datetime value */
-fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str> {
+fn write_datetime_v30(val: i64, dst: &mut [u8]) -> Result<usize, &'static str> {
     if dst.len() < 15 {
         return Err("not enought space");
     }
@@ -188,10 +188,10 @@ fn write_datetime_v30(val: &i64, dst: &mut [u8]) -> Result<usize, &'static str> 
     // } __attribute__((packed));
 
     //let dt = time::PrimitiveDateTime::from_unix_timestamp(*val);
-    let dt = time::OffsetDateTime::from_unix_timestamp(*val);
+    let dt = time::OffsetDateTime::from_unix_timestamp(val);
 
     dst[1] = 0; // we know we are utc :-)
-    LittleEndian::write_i64(&mut dst[2..], *val);
+    LittleEndian::write_i64(&mut dst[2..], val);
 
     let mut byte: u8 = (dt.second() & 0x1f) << 3;
     byte |= dt.weekday().number_from_sunday() & 0x07;
@@ -236,7 +236,6 @@ fn write_head(frps_type: u8, size: usize, dst: &mut [u8]) -> Result<usize, &'sta
 /// Writes `tag` and `length` for frps data type
 fn write_data_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
     if size == 0 {
-        dst[0];
         return Ok(/*header*/ 1);
     }
 
@@ -267,7 +266,7 @@ fn write_data_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
 
 /** Writes head of struct key */
 fn write_key_head(size: usize, dst: &mut [u8]) -> Result<usize, &'static str> {
-    if dst.len() < 1 {
+    if dst.is_empty() {
         return Err("not enought space");
     }
     dst[0] = size.try_into().unwrap();
@@ -354,6 +353,12 @@ pub struct Serializer<'a> {
     source: Source, // colecting buffer
 }
 
+impl<'a> Default for Serializer<'a> {
+    fn default() -> Self {
+        Serializer::new()
+    }
+}
+
 impl<'a> Serializer<'a> {
     pub fn new() -> Serializer<'a> {
         Serializer {
@@ -408,7 +413,7 @@ impl<'a> Serializer<'a> {
                         *state = States::FlushBuffer;
                     }
                     Value::DateTime(x) => {
-                        let cnt = write_datetime_v30(x, &mut self.source.buffer).unwrap();
+                        let cnt = write_datetime_v30(*x, &mut self.source.buffer).unwrap();
                         self.source.prepare(cnt);
                         *state = States::FlushBuffer;
                     }
@@ -586,7 +591,7 @@ impl<'a> Serializer<'a> {
                 _ => return Err("Invalid state"),
             }
         }
-        return Err("serializer is not initialized");
+        Err("serializer is not initialized")
     }
 
     pub fn write_response(
@@ -614,7 +619,7 @@ impl<'a> Serializer<'a> {
                 _ => return Err("Invalid state"),
             }
         }
-        return Err("serializer is not initialized");
+        Err("serializer is not initialized")
     }
 
     pub fn write_fault(
@@ -775,11 +780,11 @@ mod tests {
 
         // Datetime
         let now = time::OffsetDateTime::now();
-        let cnt = write_datetime_v30(&now.timestamp(), &mut buffer[cnt..]).unwrap();
+        let cnt = write_datetime_v30(now.timestamp(), &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 15);
 
         // write time before unix epoch
-        let cnt = write_datetime_v30(&-now.timestamp(), &mut buffer[cnt..]).unwrap();
+        let cnt = write_datetime_v30(-now.timestamp(), &mut buffer[cnt..]).unwrap();
         assert_eq!(cnt, 15);
     }
 

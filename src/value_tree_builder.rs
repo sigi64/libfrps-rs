@@ -39,6 +39,12 @@ pub struct ValueTreeBuilder {
     pub data: Vec<u8>,
 }
 
+impl Default for ValueTreeBuilder {
+    fn default() -> Self {
+        ValueTreeBuilder::new()
+    }
+}
+
 impl ValueTreeBuilder {
     pub fn new() -> ValueTreeBuilder {
         ValueTreeBuilder {
@@ -72,14 +78,14 @@ impl ValueTreeBuilder {
                 unreachable!();
             }
         }
-        return true;
+        true
     }
 }
 
 impl fmt::Display for ValueTreeBuilder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.what {
-            ParsedStatus::Init => write!(f, "{}", "initialized"),
+            ParsedStatus::Init => write!(f, "initialized"),
             ParsedStatus::Error(msg) => write!(f, "error({})", msg),
             ParsedStatus::Response => write!(
                 f,
@@ -127,7 +133,7 @@ impl Callback for ValueTreeBuilder {
     fn version(&mut self, major_version: u8, minor_version: u8) -> bool {
         self.major_version = major_version;
         self.minor_version = minor_version;
-        return true;
+        true
     }
 
     // Stop on false, continue on true
@@ -145,7 +151,7 @@ impl Callback for ValueTreeBuilder {
                 self.what = ParsedStatus::MethodCall(name);
             }
         }
-        return true;
+        true
     }
 
     /// Stop on false, continue on true
@@ -160,7 +166,7 @@ impl Callback for ValueTreeBuilder {
         // Fault can apppear in frps almost everywhere
         self.stack.clear();
         self.values.clear();
-        return true;
+        true
     }
 
     /// Stop on false, continue on true
@@ -175,7 +181,7 @@ impl Callback for ValueTreeBuilder {
             return ValueTreeBuilder::append_to_last(last, Value::Null);
         }
         self.values.push(Value::Null);
-        return true;
+        true
     }
 
     fn integer(&mut self, v: i64) -> bool {
@@ -183,7 +189,7 @@ impl Callback for ValueTreeBuilder {
             return ValueTreeBuilder::append_to_last(last, Value::Int(v));
         }
         self.values.push(Value::Int(v));
-        return true;
+        true
     }
 
     /* Stop on false, continue on true */
@@ -192,7 +198,7 @@ impl Callback for ValueTreeBuilder {
             return ValueTreeBuilder::append_to_last(last, Value::Bool(v));
         }
         self.values.push(Value::Bool(v));
-        return true;
+        true
     }
 
     fn double_number(&mut self, v: f64) -> bool {
@@ -200,7 +206,7 @@ impl Callback for ValueTreeBuilder {
             return ValueTreeBuilder::append_to_last(last, Value::Double(v));
         }
         self.values.push(Value::Double(v));
-        return true;
+        true
     }
 
     fn datetime(&mut self, v: i64) -> bool {
@@ -208,7 +214,7 @@ impl Callback for ValueTreeBuilder {
             return ValueTreeBuilder::append_to_last(last, Value::DateTime(v));
         }
         self.values.push(Value::DateTime(v));
-        return true;
+        true
     }
 
     fn string_begin(&mut self, len: usize) -> bool {
@@ -217,7 +223,7 @@ impl Callback for ValueTreeBuilder {
         }
         let v = Vec::with_capacity(len);
         self.stack.push(Type::Str(v));
-        return true;
+        true
     }
 
     fn string_data(&mut self, v: &[u8], _len: usize) -> bool {
@@ -233,7 +239,7 @@ impl Callback for ValueTreeBuilder {
             }
             return true;
         }
-        return false;
+        false
     }
 
     fn binary_begin(&mut self, len: usize) -> bool {
@@ -243,7 +249,7 @@ impl Callback for ValueTreeBuilder {
         let mut v: Vec<u8> = vec![];
         v.reserve(len);
         self.stack.push(Type::Binary(v));
-        return true;
+        true
     }
 
     fn binary_data(&mut self, v: &[u8], _len: usize) -> bool {
@@ -260,7 +266,7 @@ impl Callback for ValueTreeBuilder {
             }
             return true;
         }
-        return false;
+        false
     }
 
     fn array_begin(&mut self, len: usize) -> bool {
@@ -270,7 +276,7 @@ impl Callback for ValueTreeBuilder {
         let mut v = vec![];
         v.reserve(len);
         self.stack.push(Type::Array(v));
-        return true;
+        true
     }
 
     fn struct_begin(&mut self, len: usize) -> bool {
@@ -280,7 +286,7 @@ impl Callback for ValueTreeBuilder {
         let mut h = HashMap::new();
         h.reserve(len);
         self.stack.push(Type::Struct((vec![], h)));
-        return true;
+        true
     }
 
     fn struct_key(&mut self, v: &[u8], _len: usize) -> bool {
@@ -291,7 +297,7 @@ impl Callback for ValueTreeBuilder {
             }
             return true;
         }
-        return false;
+        false
     }
 
     fn value_end(&mut self) -> bool {
@@ -321,6 +327,6 @@ impl Callback for ValueTreeBuilder {
             }
             return true;
         }
-        return false;
+        false
     }
 }

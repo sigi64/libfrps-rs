@@ -72,7 +72,7 @@ impl Value {
 
                 // We want sorted according keys so we use BTreeMap
                 let v: BTreeMap<_, _> = v.iter().collect();
-                return "{".to_owned()
+                "{".to_owned()
                     + &v.iter()
                         .map(|(k, x)| {
                             cnt += 1;
@@ -84,7 +84,7 @@ impl Value {
                             }
                         })
                         .collect::<String>()
-                    + &"}".to_owned();
+                    + &"}".to_owned()
             }
         }
     }
